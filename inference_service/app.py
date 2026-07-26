@@ -38,6 +38,7 @@ import os
 import time
 
 from flask import Flask, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 _embedder = None
 _reranker = None
@@ -99,7 +100,12 @@ def _check_auth():
 
 def create_app():
     app = Flask(__name__)
-
+    @app.route("/")
+    def root():
+        return jsonify({
+            "service": "inference_service",
+            "status": "ok"
+        })
     @app.route("/health")
     def health():
         return jsonify({"status": "ok" if _models_loaded else "loading", "models_loaded": _models_loaded})
@@ -139,9 +145,12 @@ def create_app():
 
         scores = _reranker.predict([(query, doc) for doc in documents])
         return jsonify({"scores": [float(s) for s in scores]})
-
+   
     @app.errorhandler(Exception)
     def handle_error(err):
+        if isinstance(err, HTTPException):
+            return err
+
         app.logger.exception("inference_service error")
         return jsonify({"error": "internal error"}), 500
 
