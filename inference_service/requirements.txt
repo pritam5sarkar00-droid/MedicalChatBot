@@ -1,0 +1,10 @@
+# Standalone from the main app's requirements.txt on purpose -- this
+# service has nothing to do with LangChain/Pinecone/Groq/Postgres, so it
+# doesn't inherit any of that. See app.py's module docstring.
+flask==3.1.1
+# Same pin as the main project's requirements-local-inference.txt, so
+# local dev/CI resolve the exact same model-loading behavior regardless
+# of which of the two "sentence-transformers lives here" spots it's
+# installed from.
+sentence-transformers==4.1.0
+numpy==2.2.6

@@ -1,0 +1,25 @@
+FROM python:3.10-slim-bookworm
+
+# The lightweight half of the split deployment: the main app WITHOUT the
+# embedding/reranker models baked in -- it calls out to a separate
+# inference_service/ deployment over HTTP instead (EMBEDDING_SERVICE_URL,
+# see .env.example and DEPLOYMENT.md). No torch here at all, so this
+# image is small and this container's RAM is spent entirely on
+# Flask/LangChain/psycopg2, not on ML models it isn't running -- which is
+# the whole point: it's what makes two separate 512MB free-tier instances
+# (this one + inference_service/) work where one shared 512MB instance
+# running everything together didn't (see DEPLOYMENT.md).
+#
+# For the simpler, single-container option instead, use the plain
+# Dockerfile at the repo root.
+
+WORKDIR /app
+
+COPY . /app
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+ENV PORT=8080
+EXPOSE 8080
+
+CMD ["python3", "app.py"]

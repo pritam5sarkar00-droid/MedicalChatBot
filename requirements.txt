@@ -1,0 +1,43 @@
+langchain==0.3.26
+flask==3.1.1
+flask-cors==5.0.0
+flask-limiter==3.9.0
+# Pinned to the last 2.x release that still supports Python 3.10 (numpy
+# 2.3+ requires Python >=3.11) -- this project's Dockerfile, CI workflow,
+# and README's `conda create -n medicare python=3.10` instructions are
+# all Python 3.10, so a newer numpy pin here would break `pip install`
+# for literally everyone following those exact steps. If you deliberately
+# move the whole project to Python 3.11+, this can go up to 2.3.x too.
+# Needed directly by src/cache.py's cosine-similarity math -- kept in
+# this core file (unlike sentence-transformers below) because the
+# semantic cache always runs inside the main app process, in both
+# single-service and split-service deployments.
+numpy==2.2.6
+# Powers src/helper.py's RemoteEmbeddings/RemoteReranker HTTP clients,
+# used when EMBEDDING_SERVICE_URL points this app at a separate
+# inference_service/ deployment instead of loading the embedding/rerank
+# models in-process -- see DEPLOYMENT.md's "split for free hosting"
+# section. Lightweight and has no reason to ever need pinning-around, so
+# it isn't called out with the same "why is this here" comment treatment
+# as the packages below.
+requests==2.32.3
+pypdf==5.6.1
+python-dotenv==1.1.0
+langchain-pinecone==0.2.8
+# Pinned to the pre-1.0 line on purpose: langchain-groq>=1.0.0 requires
+# langchain-core>=1.0.0, which conflicts with langchain==0.3.26 above.
+# Don't bump this without also upgrading the rest of the langchain stack.
+langchain-groq==0.3.8
+langchain-community==0.3.26
+psycopg2-binary==2.9.12
+-e .
+
+# sentence-transformers (and the torch/transformers it pulls in) is
+# deliberately NOT listed here anymore -- see requirements-local-inference.txt.
+# This file alone is now enough to run the main app against a *separate*
+# inference_service/ deployment (EMBEDDING_SERVICE_URL set): no torch, no
+# ~1-2GB of ML dependencies, a much lighter and faster `pip install`, and
+# comfortable headroom inside a 512MB free-tier instance next to
+# LangChain/Flask/psycopg2. If you're running everything as a single
+# service instead (the simpler option -- see DEPLOYMENT.md), install
+# requirements-local-inference.txt too.

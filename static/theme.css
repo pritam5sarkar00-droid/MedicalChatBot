@@ -1,0 +1,112 @@
+/* =========================================================================
+   MediCare AI — theme.css
+   Only what Tailwind's utility classes can't express: the CSS custom
+   properties that drive light/dark theming (referenced from app.jsx via
+   Tailwind's arbitrary-value syntax, e.g. bg-[var(--paper)]), plus a
+   handful of small non-utility styles (scrollbars, markdown output).
+   Layout, spacing, and typography utilities all live directly in the JSX.
+   ========================================================================= */
+
+:root {
+  --paper: #F3F6F3;
+  --paper-raised: #FFFFFF;
+  --ink: #12332C;
+  --ink-soft: #395349;
+  --accent: #2F7B6C;
+  --accent-strong: #1F5D50;
+  --accent-soft: #E3EEE9;
+  --amber: #C97A32;
+  --amber-soft: #F8E9D8;
+  --border: #DEE6E1;
+  --muted: #66766F;
+  --alert: #B8382A;
+  --alert-soft: #FBE7E3;
+
+  /* Sidebar in light mode: a soft, slightly-darker-than-paper neutral,
+     with dark text — distinct panel, not an inverted dark block. */
+  --sidebar-bg: #EAEFEA;
+  --sidebar-bg-raised: #FFFFFF;
+  --sidebar-text: #12332C;
+  --sidebar-muted: #66766F;
+  --sidebar-border: #D9E2DC;
+  --sidebar-hover: rgba(18, 51, 44, 0.06);
+}
+
+[data-theme="dark"] {
+  --paper: #101C18;
+  --paper-raised: #182722;
+  --ink: #EAF2EE;
+  --ink-soft: #B9CBC4;
+  --accent: #57B39C;
+  --accent-strong: #7BCBB6;
+  --accent-soft: #1D362F;
+  --amber: #E3A462;
+  --amber-soft: #34281A;
+  --border: #24352F;
+  --muted: #86988F;
+
+  /* Sidebar in dark mode: darker than the main panel for a touch of
+     depth, matching the rest of the theme instead of staying fixed. */
+  --sidebar-bg: #0A1613;
+  --sidebar-bg-raised: #182722;
+  --sidebar-text: #EAF2EE;
+  --sidebar-muted: #86988F;
+  --sidebar-border: rgba(234, 242, 238, 0.08);
+  --sidebar-hover: rgba(234, 242, 238, 0.06);
+  --alert: #E17A6B;
+  --alert-soft: #3A1E1B;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: var(--paper);
+  transition: background 0.25s ease;
+}
+
+/* Thin scrollbars for the sidebar history and chat log.
+   Chrome/Safari/Edge via ::-webkit-scrollbar; Firefox via the standard
+   scrollbar-width/scrollbar-color properties (previously only styled for
+   webkit browsers, so this was invisible/default in Firefox). */
+.sidebar-scroll, .chat-scroll {
+  scrollbar-width: thin;
+}
+.sidebar-scroll { scrollbar-color: var(--sidebar-border) transparent; }
+.chat-scroll { scrollbar-color: var(--border) transparent; }
+
+.sidebar-scroll::-webkit-scrollbar, .chat-scroll::-webkit-scrollbar { width: 6px; }
+.sidebar-scroll::-webkit-scrollbar-track, .chat-scroll::-webkit-scrollbar-track { background: transparent; }
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: var(--sidebar-border);
+  border-radius: 3px;
+  transition: background 0.15s ease;
+}
+.sidebar-scroll::-webkit-scrollbar-thumb:hover { background: var(--sidebar-muted); }
+.chat-scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+  transition: background 0.15s ease;
+}
+.chat-scroll::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* Minimal styling for markdown-rendered bot messages (marked.js output) */
+.prose-chat p { margin: 0 0 8px; }
+.prose-chat p:last-child { margin-bottom: 0; }
+.prose-chat ul, .prose-chat ol { margin: 6px 0; padding-left: 20px; }
+.prose-chat strong { color: var(--ink); }
+.prose-chat code {
+  font-family: "IBM Plex Mono", "SF Mono", monospace;
+  background: var(--accent-soft);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}

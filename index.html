@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>MediCare AI — by Pritam</title>
+
+	<!--
+		This is the STANDALONE entry point — for deploying the frontend as
+		its own static site (Netlify, Vercel, Cloudflare Pages, GitHub Pages,
+		...), separately from the Flask API. See DEPLOYMENT.md.
+
+		If Flask is serving the frontend itself instead (the simpler,
+		single-service option), you don't need this file at all —
+		templates/chat.html is what Flask renders, and it's functionally
+		identical to this one except for two things:
+		  1. it uses Jinja's {{ url_for(...) }} to build asset URLs, which
+		     only works when Flask is actually rendering the template (a
+		     plain static host has no Jinja, so this file uses plain "/static/..."
+		     paths instead — which is also exactly why this file can be
+		     deployed as pure static HTML with zero build step, same as
+		     templates/chat.html itself needs none);
+		  2. it sets window.__MEDICARE_API_BASE__ below, since "the frontend"
+		     and "the API" are two different origins in this deployment
+		     shape — see static/app.jsx's API_BASE constant, which is what
+		     actually reads this.
+
+		Deploying this file: point your static host at the repository ROOT
+		(not this file directly, and not the static/ folder) -- its
+		publish/output directory should just be ".". Because this file's
+		asset paths below are plain "/static/app.jsx" etc, and those files
+		already live at exactly that path in the repo (static/app.jsx), the
+		host serves them correctly with no copying, renaming, or build step.
+		Then set this file as your host's entry point / rewrite target for "/".
+	-->
+	<script>
+		// EDIT THIS before deploying: the URL of your separately-deployed
+		// API (app.py) -- e.g. a Render or Koyeb URL. Leave it blank and
+		// this behaves like same-origin (which will fail here, since this
+		// file is not served by Flask -- so in practice, deploying this
+		// file at all means this line needs a real value).
+		window.__MEDICARE_API_BASE__ = "https://your-api-service.onrender.com";
+	</script>
+
+	<link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+	<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png" />
+	<link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png" />
+	<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
+	<link rel="alternate icon" href="/static/favicon.ico" />
+	<link rel="shortcut icon" href="/static/favicon.ico" />
+
+	<!-- Applied before first paint so a saved dark-mode preference doesn't
+	     flash light for a moment while React loads (must match THEME_KEY
+	     in static/app.jsx). -->
+	<script>
+		(function () {
+			try {
+				var theme = localStorage.getItem("medicare_ai_theme") || "light";
+				document.documentElement.setAttribute("data-theme", theme);
+			} catch (e) {}
+		})();
+	</script>
+
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,500;0,600;0,700;1,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+	<!-- Tailwind (Play CDN — JIT in the browser, no build step) -->
+	<script src="https://cdn.tailwindcss.com"></script>
+	<script>
+		tailwind.config = {
+			theme: {
+				extend: {
+					fontFamily: {
+						display: ['Fraunces', 'ui-serif', 'Georgia', 'serif'],
+						mono: ['"IBM Plex Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+					},
+					keyframes: {
+						'msg-in': { '0%': { opacity: 0, transform: 'translateY(6px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
+						'typing-bounce': { '0%, 60%, 100%': { transform: 'translateY(0)', opacity: 0.5 }, '30%': { transform: 'translateY(-4px)', opacity: 1 } },
+						'mic-pulse': { '0%': { boxShadow: '0 0 0 0 rgba(184,56,42,0.35)' }, '70%': { boxShadow: '0 0 0 10px rgba(184,56,42,0)' }, '100%': { boxShadow: '0 0 0 0 rgba(184,56,42,0)' } },
+					},
+					animation: {
+						'msg-in': 'msg-in 0.22s ease',
+						'typing-bounce': 'typing-bounce 1.1s infinite ease-in-out',
+						'mic-pulse': 'mic-pulse 1.2s infinite',
+					},
+				},
+			},
+		};
+	</script>
+
+	<link rel="stylesheet" href="/static/theme.css" />
+</head>
+<body>
+	<div id="root">
+		<!-- Replaced once React mounts. If you're staring at this, something
+		     failed before React could even start -- check the browser console. -->
+		<noscript>MediCare AI needs JavaScript enabled to run.</noscript>
+		<div id="bootLoading" style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#66766F;">
+			Loading MediCare AI…
+		</div>
+	</div>
+
+	<!-- React (production UMD builds) -->
+	<script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+	<script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+
+	<!-- Markdown rendering for bot messages -->
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+
+	<!-- Charts for the Dashboard view (static/app.jsx). UMD build
+	     specifically -- see templates/chat.html's identical comment here
+	     for why. -->
+	<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
+
+	<!-- Babel standalone: transforms static/app.jsx in-browser (no build step). -->
+	<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+	<script>
+		// Identical to templates/chat.html's boot script, except the fetch
+		// URL below is a plain "/static/app.jsx" instead of Jinja's
+		// {{ url_for(...) }} -- see the big comment at the top of this file.
+		(function () {
+			function showBootError(title, detail) {
+				var root = document.getElementById("root");
+				if (root) {
+					root.innerHTML =
+						'<div style="max-width:640px;margin:64px auto;padding:24px;font-family:sans-serif;line-height:1.6;color:#333;">' +
+						'<h2 style="color:#B8382A;margin-bottom:8px;">' + title + '</h2>' +
+						'<p style="margin-bottom:8px;">' + detail + '</p>' +
+						'<p style="font-size:13px;color:#888;">Open the browser console (F12 → Console tab) for full details.</p>' +
+						"</div>";
+				}
+				console.error(title + ": " + detail);
+			}
+
+			if (!window.React || !window.ReactDOM) {
+				showBootError(
+					"Couldn't load React",
+					"A CDN script (React/ReactDOM from unpkg.com) failed to load. Check your internet connection, or an ad-blocker/privacy extension may be blocking it — try disabling it and refreshing."
+				);
+				return;
+			}
+			if (!window.Babel) {
+				showBootError(
+					"Couldn't load Babel",
+					"The Babel CDN script (from unpkg.com) failed to load. Check your internet connection, or an ad-blocker/privacy extension may be blocking it — try disabling it and refreshing."
+				);
+				return;
+			}
+
+			fetch("/static/app.jsx")
+				.then(function (res) {
+					if (!res.ok) throw new Error("Fetching app.jsx returned HTTP " + res.status);
+					return res.text();
+				})
+				.then(function (source) {
+					// runtime: "classic" -- see templates/chat.html's identical
+					// comment here for why "automatic" breaks in this no-bundler setup.
+					var transformed = window.Babel.transform(source, {
+						presets: [["react", { runtime: "classic" }]],
+					}).code;
+					var script = document.createElement("script");
+					script.textContent = transformed;
+					document.body.appendChild(script);
+				})
+				.catch(function (err) {
+					showBootError(
+						"Something went wrong loading the app",
+						(err && err.message) ? err.message : String(err)
+					);
+				});
+		})();
+	</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+name: Tests
+
+# Runs the pytest suite on every push/PR. Deliberately kept separate from
+# cicd.yaml (the AWS deploy pipeline) — this job needs zero secrets, since
+# tests inject a fake pipeline instead of calling real Pinecone/Groq.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -v

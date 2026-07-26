@@ -1,0 +1,23 @@
+# Extends requirements.txt with the embedding + reranking models
+# themselves, for running them *in-process* inside the main app.
+#
+# Install this (on top of requirements.txt) when:
+#   - you're developing locally and don't want to also run a second
+#     inference_service/ process, or
+#   - you're deploying as a single service and have a host with enough
+#     RAM to comfortably hold torch + two small transformer models
+#     alongside Flask/LangChain (see README's Troubleshooting section
+#     and DEPLOYMENT.md for what "enough" means on a free tier).
+#
+# Skip this file entirely when EMBEDDING_SERVICE_URL is set and pointed
+# at a separate inference_service/ deployment (see DEPLOYMENT.md) --
+# that's the whole point of the split: the main app never needs torch at
+# all in that setup, and requirements.txt alone is sufficient.
+#
+# Install with: pip install -r requirements-local-inference.txt
+# (installing CPU-only torch first is strongly recommended -- see
+# README.md's "Getting started" and Dockerfile, which both do this
+# automatically):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+-r requirements.txt
+sentence-transformers==4.1.0

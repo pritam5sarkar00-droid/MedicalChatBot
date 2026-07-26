@@ -1,0 +1,246 @@
+[
+  {
+    "id": "q01",
+    "category": "condition",
+    "question": "What is asthma?",
+    "expected_keywords": [
+      "airway",
+      "breath",
+      "wheez",
+      "inflam"
+    ]
+  },
+  {
+    "id": "q02",
+    "category": "term",
+    "question": "What are the symptoms of asthma?",
+    "expected_keywords": [
+      "cough",
+      "wheez",
+      "chest",
+      "short"
+    ]
+  },
+  {
+    "id": "q03",
+    "category": "term",
+    "question": "What can trigger an asthma attack?",
+    "expected_keywords": [
+      "trigger",
+      "smoke",
+      "pollen"
+    ]
+  },
+  {
+    "id": "q04",
+    "category": "condition",
+    "question": "Can asthma be cured?",
+    "expected_keywords": [
+      "cannot",
+      "cure",
+      "lifetime"
+    ]
+  },
+  {
+    "id": "q05",
+    "category": "condition",
+    "question": "What is diabetes?",
+    "expected_keywords": [
+      "glucose",
+      "insulin",
+      "blood sugar"
+    ]
+  },
+  {
+    "id": "q06",
+    "category": "term",
+    "question": "What is the difference between type 1 and type 2 diabetes?",
+    "expected_keywords": [
+      "insulin",
+      "type 1",
+      "type 2"
+    ]
+  },
+  {
+    "id": "q07",
+    "category": "term",
+    "question": "What is prediabetes?",
+    "expected_keywords": [
+      "prediabetes",
+      "higher",
+      "type 2"
+    ]
+  },
+  {
+    "id": "q08",
+    "category": "term",
+    "question": "What are the symptoms of type 2 diabetes?",
+    "expected_keywords": [
+      "tired",
+      "thirst",
+      "urinat"
+    ]
+  },
+  {
+    "id": "q09",
+    "category": "management",
+    "question": "What tests are used to diagnose diabetes?",
+    "expected_keywords": [
+      "a1c",
+      "glucose",
+      "fasting"
+    ]
+  },
+  {
+    "id": "q10",
+    "category": "condition",
+    "question": "What is high blood pressure?",
+    "expected_keywords": [
+      "systolic",
+      "diastolic",
+      "arter"
+    ]
+  },
+  {
+    "id": "q11",
+    "category": "term",
+    "question": "What is isolated systolic hypertension?",
+    "expected_keywords": [
+      "systolic",
+      "stiff",
+      "older"
+    ]
+  },
+  {
+    "id": "q12",
+    "category": "management",
+    "question": "What lifestyle changes can help lower blood pressure?",
+    "expected_keywords": [
+      "exercise",
+      "salt",
+      "smok"
+    ]
+  },
+  {
+    "id": "q13",
+    "category": "term",
+    "question": "What did the SPRINT study find about blood pressure?",
+    "expected_keywords": [
+      "sprint",
+      "cardiovascular",
+      "120"
+    ]
+  },
+  {
+    "id": "q14",
+    "category": "condition",
+    "question": "What is depression?",
+    "expected_keywords": [
+      "mood",
+      "sad",
+      "symptoms"
+    ]
+  },
+  {
+    "id": "q15",
+    "category": "term",
+    "question": "What are the different types of depression?",
+    "expected_keywords": [
+      "major depression",
+      "persistent",
+      "seasonal"
+    ]
+  },
+  {
+    "id": "q16",
+    "category": "term",
+    "question": "What are common signs and symptoms of depression?",
+    "expected_keywords": [
+      "hopeless",
+      "irritab",
+      "fatigue"
+    ]
+  },
+  {
+    "id": "q17",
+    "category": "management",
+    "question": "How is depression usually treated?",
+    "expected_keywords": [
+      "psychotherapy",
+      "medication",
+      "antidepressant"
+    ]
+  },
+  {
+    "id": "q18",
+    "category": "management",
+    "question": "What number can someone in the US call or text for a mental health crisis?",
+    "expected_keywords": [
+      "988",
+      "crisis"
+    ]
+  },
+  {
+    "id": "q19",
+    "category": "management",
+    "question": "How can I help a loved one who is depressed?",
+    "expected_keywords": [
+      "support",
+      "patien",
+      "treatment plan"
+    ]
+  },
+  {
+    "id": "q20",
+    "category": "term",
+    "question": "Is St. John's wort approved by the FDA for treating depression?",
+    "expected_keywords": [
+      "not approved",
+      "supplement"
+    ]
+  },
+  {
+    "id": "q21",
+    "category": "term",
+    "question": "Are people with diabetes at higher risk for high blood pressure problems?",
+    "expected_keywords": [
+      "blood pressure",
+      "diabetes"
+    ]
+  },
+  {
+    "id": "q22",
+    "category": "out_of_scope",
+    "question": "What is the capital of France?",
+    "expected_keywords": [],
+    "expect_no_answer": true
+  },
+  {
+    "id": "q23",
+    "category": "out_of_scope",
+    "question": "What is chickenpox and how does it spread?",
+    "expected_keywords": [],
+    "expect_no_answer": true
+  },
+  {
+    "id": "q24",
+    "category": "out_of_scope",
+    "question": "How is a broken bone fracture typically treated?",
+    "expected_keywords": [],
+    "expect_no_answer": true
+  },
+  {
+    "id": "q25",
+    "category": "out_of_scope",
+    "question": "What is anaphylaxis and what causes it?",
+    "expected_keywords": [],
+    "expect_no_answer": true
+  },
+  {
+    "id": "q26",
+    "category": "out_of_scope",
+    "question": "What's the best treatment for a common cold?",
+    "expected_keywords": [],
+    "expect_no_answer": true
+  }
+]
