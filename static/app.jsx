@@ -261,10 +261,66 @@ function useTheme() {
   return [theme, toggle];
 }
 
+const SIDEBAR_WIDTH_KEY = "medicare_ai_sidebar_width";
+const SIDEBAR_MIN_WIDTH = 240;
+const SIDEBAR_MAX_WIDTH = 440;
+const SIDEBAR_DEFAULT_WIDTH = 288; // matches the old fixed w-72 (288px)
+
+function clampSidebarWidth(px) {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, px));
+}
+
+function useSidebarWidth() {
+  const [width, setWidth] = useState(() => {
+    const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return saved ? clampSidebarWidth(saved) : SIDEBAR_DEFAULT_WIDTH;
+  });
+  const [resizing, setResizing] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
+  }, [width]);
+
+  // Drag-to-resize, like a terminal or IDE panel divider. Tracked with
+  // window-level listeners (not just on the handle itself) so the drag
+  // keeps working even when the pointer moves faster than the thin
+  // handle, or drifts off it entirely mid-drag -- and measured as a
+  // delta from the position/width at drag-start rather than
+  // accumulating small per-event deltas, so it can't drift out of sync
+  // with the pointer over a long drag.
+  const startResizing = useCallback(
+    (startEvent) => {
+      startEvent.preventDefault();
+      const startX = startEvent.clientX;
+      const startWidth = width;
+      setResizing(true);
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "col-resize";
+
+      const handleMove = (moveEvent) => {
+        setWidth(clampSidebarWidth(startWidth + (moveEvent.clientX - startX)));
+      };
+      const stopResizing = () => {
+        setResizing(false);
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", stopResizing);
+      };
+      window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", stopResizing);
+    },
+    [width]
+  );
+
+  return { width, resizing, startResizing };
+}
+
 function useVoiceInput(onResult) {
   const recognitionRef = useRef(null);
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(true);
+  const [interimTranscript, setInterimTranscript] = useState("");
 
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -274,11 +330,36 @@ function useVoiceInput(onResult) {
     }
     const recognition = new SpeechRecognition();
     recognition.lang = "en-IN";
-    recognition.interimResults = false;
+    recognition.interimResults = true;
     recognition.maxAlternatives = 1;
-    recognition.addEventListener("result", (e) => onResult(e.results[0][0].transcript));
-    recognition.addEventListener("end", () => setListening(false));
-    recognition.addEventListener("error", () => setListening(false));
+    recognition.addEventListener("result", (e) => {
+      // interimResults=true makes this fire repeatedly while the person
+      // is still speaking (each result marked isFinal: false) and once
+      // more with the settled text (isFinal: true) when they pause --
+      // surfacing the interim text live (below) is what makes voice
+      // input visible *as you speak* instead of the composer sitting
+      // empty until you stop talking.
+      let transcript = "";
+      let isFinal = false;
+      for (let i = 0; i < e.results.length; i++) {
+        transcript += e.results[i][0].transcript;
+        if (e.results[i].isFinal) isFinal = true;
+      }
+      if (isFinal) {
+        setInterimTranscript("");
+        onResult(transcript);
+      } else {
+        setInterimTranscript(transcript);
+      }
+    });
+    recognition.addEventListener("end", () => {
+      setListening(false);
+      setInterimTranscript("");
+    });
+    recognition.addEventListener("error", () => {
+      setListening(false);
+      setInterimTranscript("");
+    });
     recognitionRef.current = recognition;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -288,12 +369,13 @@ function useVoiceInput(onResult) {
     if (listening) {
       recognitionRef.current.stop();
     } else {
+      setInterimTranscript("");
       setListening(true);
       recognitionRef.current.start();
     }
   }, [listening]);
 
-  return { listening, supported, toggle };
+  return { listening, supported, toggle, interimTranscript };
 }
 
 // ---------------------------------------------------------------------------
@@ -442,7 +524,7 @@ function DocumentsPanel({ documents, selectedIds, onToggleSelect, onToggleAll, o
   );
 }
 
-function Sidebar({ theme, onToggleTheme, conversations, activeId, onSelect, onDelete, onNewChat, open, onClose, documents, selectedDocIds, onToggleSelectDocument, onToggleSelectAllDocuments, onDeleteDocument, onUploadClick, uploadingDocument, view, onOpenDashboard }) {
+function Sidebar({ theme, onToggleTheme, conversations, activeId, onSelect, onDelete, onNewChat, open, onClose, width, resizing, onStartResize, documents, selectedDocIds, onToggleSelectDocument, onToggleSelectAllDocuments, onDeleteDocument, onUploadClick, uploadingDocument, view, onOpenDashboard }) {
   const list = useMemo(
     () =>
       Object.values(conversations)
@@ -472,18 +554,21 @@ function Sidebar({ theme, onToggleTheme, conversations, activeId, onSelect, onDe
         <div onClick={onClose} className="fixed inset-0 bg-black/40 z-10 md:hidden" aria-hidden="true" />
       )}
       <aside
+        style={open ? { width } : undefined}
         className={
-          "fixed md:relative z-20 h-full flex-shrink-0 bg-[var(--sidebar-bg)] text-[var(--sidebar-text)] border-r border-[var(--sidebar-border)] overflow-hidden transition-all duration-200 ease-in-out " +
+          "fixed md:relative z-20 h-full flex-shrink-0 bg-[var(--sidebar-bg)] text-[var(--sidebar-text)] border-r border-[var(--sidebar-border)] overflow-hidden " +
+          (resizing ? "" : "transition-all duration-200 ease-in-out ") +
           (open
-            ? "w-72 translate-x-0 shadow-2xl md:shadow-none"
+            ? "translate-x-0 shadow-2xl md:shadow-none"
             : "w-72 md:w-0 -translate-x-full md:translate-x-0 md:border-r-0")
         }
       >
         {/* Fixed-width inner wrapper: the <aside> above animates its width
-            down to 0 on desktop collapse, but this stays 288px wide the
-            whole time so the content slides/clips cleanly instead of
-            squishing and reflowing mid-animation. */}
-        <div className="w-72 h-full flex flex-col p-5">
+            down to 0 on desktop collapse, but this stays at the sidebar's
+            current width (whatever it's set to below) the whole time, so
+            the content slides/clips cleanly instead of squishing and
+            reflowing mid-animation. */}
+        <div style={{ width }} className="h-full flex flex-col p-5">
           <div className="flex items-center gap-3 px-1 pb-5">
             <Icon.Logo />
             <div className="flex-1 min-w-0">
@@ -590,6 +675,29 @@ function Sidebar({ theme, onToggleTheme, conversations, activeId, onSelect, onDe
               advice, diagnosis, or treatment.
             </p>
           </div>
+        </div>
+
+        {/* Drag-to-resize handle -- like a terminal/IDE panel divider.
+            Desktop only: mobile shows the sidebar as a fixed full-width-ish
+            overlay (see the "open"/"-translate-x-full" branch above),
+            where a user-adjustable width doesn't really apply. The hit
+            area (w-2, straddling the visible border) is deliberately
+            wider than the thin indicator line inside it, so it's easy to
+            grab without looking heavy-handed at rest. */}
+        <div
+          onPointerDown={onStartResize}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          title="Drag to resize"
+          className="hidden md:flex absolute top-0 -right-1 h-full w-2 cursor-col-resize items-center justify-center touch-none select-none group z-10"
+        >
+          <span
+            className={
+              "w-[3px] h-10 rounded-full transition-colors " +
+              (resizing ? "bg-[var(--accent)]" : "bg-transparent group-hover:bg-[var(--accent)]")
+            }
+          />
         </div>
       </aside>
     </>
@@ -798,6 +906,13 @@ function EmergencyBanner({ show }) {
 }
 
 function Composer({ value, onChange, onSubmit, voice, onAttachClick, uploading }) {
+  // While actively listening, the field previews the in-progress
+  // transcript live (see useVoiceInput's interimResults handling) rather
+  // than sitting on whatever was last typed until speech recognition
+  // settles on a final result -- read-only for that same span so a
+  // half-spoken phrase can't get mixed up with manual typing.
+  const displayValue = voice.listening ? voice.interimTranscript : value;
+
   return (
     <form
       onSubmit={(e) => {
@@ -816,21 +931,39 @@ function Composer({ value, onChange, onSubmit, voice, onAttachClick, uploading }
       </IconButton>
       {voice.supported && (
         <IconButton
-          title="Voice input"
+          title={voice.listening ? "Stop voice input" : "Voice input"}
           onClick={voice.toggle}
           className={"w-11 h-11 flex-shrink-0 " + (voice.listening ? "!bg-[var(--alert)] !border-[var(--alert)] !text-white animate-mic-pulse" : "")}
         >
           <Icon.Mic />
         </IconButton>
       )}
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="Describe your symptom or ask a health question…"
-        autoComplete="off"
-        className="flex-1 h-[46px] rounded-full border border-[var(--border)] bg-[var(--paper-raised)] text-[var(--ink)] px-5 text-[14.5px] placeholder:text-[var(--muted)] focus:outline-none focus:border-[var(--accent)] transition-colors"
-      />
+      <div className="relative flex-1">
+        <input
+          type="text"
+          value={displayValue}
+          onChange={(e) => onChange(e.target.value)}
+          readOnly={voice.listening}
+          placeholder={voice.listening ? "Listening…" : "Describe your symptom or ask a health question…"}
+          autoComplete="off"
+          className={
+            "w-full h-[46px] rounded-full border bg-[var(--paper-raised)] text-[var(--ink)] pl-5 text-[14.5px] placeholder:text-[var(--muted)] focus:outline-none transition-colors " +
+            (voice.listening ? "border-[var(--alert)] pr-11" : "border-[var(--border)] focus:border-[var(--accent)] pr-5")
+          }
+        />
+        {voice.listening && (
+          <span className="absolute right-4 top-1/2 -translate-y-1/2 flex items-end gap-[3px] h-4" aria-hidden="true">
+            <span className="w-[3px] h-full rounded-full bg-[var(--alert)] animate-voice-wave" />
+            <span className="w-[3px] h-full rounded-full bg-[var(--alert)] animate-voice-wave [animation-delay:150ms]" />
+            <span className="w-[3px] h-full rounded-full bg-[var(--alert)] animate-voice-wave [animation-delay:300ms]" />
+          </span>
+        )}
+        {/* Screen-reader-only announcement -- the waveform above and the
+            mic button's own pulse/color change are both purely visual. */}
+        <span className="sr-only" role="status" aria-live="polite">
+          {voice.listening ? `Listening…${voice.interimTranscript ? ` ${voice.interimTranscript}` : ""}` : ""}
+        </span>
+      </div>
       <button
         type="submit"
         title="Send"
@@ -1212,6 +1345,7 @@ function App() {
   const [conversations, setConversations] = useState(loadConversations);
   const [activeId, setActiveId] = useState(() => localStorage.getItem(ACTIVE_KEY));
   const [theme, toggleTheme] = useTheme();
+  const sidebar = useSidebarWidth();
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 768);
   const [inputValue, setInputValue] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -1619,6 +1753,9 @@ function App() {
         onNewChat={handleNewChat}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        width={sidebar.width}
+        resizing={sidebar.resizing}
+        onStartResize={sidebar.startResizing}
         documents={documents}
         selectedDocIds={selectedDocIds}
         onToggleSelectDocument={toggleSelectDocument}
