@@ -209,6 +209,66 @@
     ]
   },
   {
+    "id": "q27",
+    "category": "condition",
+    "question": "What could cause a persistent headache that lasts for days?",
+    "expected_keywords": [
+      "chronic",
+      "tension",
+      "headache"
+    ]
+  },
+  {
+    "id": "q28",
+    "category": "term",
+    "question": "What triggers tension-type headaches?",
+    "expected_keywords": [
+      "stress",
+      "sleep",
+      "dehydrat"
+    ]
+  },
+  {
+    "id": "q29",
+    "category": "management",
+    "question": "When should I see a doctor right away about a headache?",
+    "expected_keywords": [
+      "sudden",
+      "severe",
+      "stiff neck"
+    ]
+  },
+  {
+    "id": "q30",
+    "category": "condition",
+    "question": "What is the difference between good cholesterol and bad cholesterol?",
+    "expected_keywords": [
+      "hdl",
+      "ldl",
+      "good cholesterol"
+    ]
+  },
+  {
+    "id": "q31",
+    "category": "term",
+    "question": "What should I ask my doctor about high cholesterol?",
+    "expected_keywords": [
+      "ldl",
+      "hdl",
+      "triglyceride"
+    ]
+  },
+  {
+    "id": "q32",
+    "category": "management",
+    "question": "How can I lower my cholesterol through diet?",
+    "expected_keywords": [
+      "saturated fat",
+      "trans fat",
+      "fruits"
+    ]
+  },
+  {
     "id": "q22",
     "category": "out_of_scope",
     "question": "What is the capital of France?",

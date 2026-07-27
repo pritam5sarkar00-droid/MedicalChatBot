@@ -1730,7 +1730,15 @@ function App() {
   const showHero = messages.length === 0 && !isStreamingHere;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--paper)] text-[var(--ink)]">
+    // h-[100dvh], not h-screen (100vh): on mobile browsers, 100vh is sized
+    // for the *largest* possible viewport (address bar hidden), which is
+    // usually taller than what's actually visible (address bar shown) --
+    // so this whole container ends up taller than the real viewport, and
+    // the page has to be scrolled just to reveal the composer/top bar
+    // that flexbox already placed correctly within it. dvh tracks the
+    // real, current visible height instead, so the outer page never needs
+    // to scroll at all -- only the messages list below does.
+    <div className="flex h-[100dvh] overflow-hidden bg-[var(--paper)] text-[var(--ink)]">
       <input
         ref={fileInputRef}
         type="file"

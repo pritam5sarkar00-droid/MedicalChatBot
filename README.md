@@ -37,8 +37,8 @@ demo from a system someone actually thought about running in production.
   the split is what lets both models stay on comfortably within
   free-tier RAM instead of trading quality for headroom.
 - **One knowledge base, built from PDFs you add or that ship with it** —
-  four small public-domain fact sheets (diabetes, high blood pressure,
-  asthma, depression — see `data/seed/`) come pre-indexed, and uploading
+  six small public-domain fact sheets (diabetes, high blood pressure,
+  asthma, depression, headache, and high cholesterol — see `data/seed/`) come pre-indexed, and uploading
   more (the paperclip icon in the composer, or the "+" in the sidebar)
   adds to the exact same knowledge base, indexed and cited identically —
   there's no special-cased "reference" document behind the scenes. Every
@@ -171,7 +171,7 @@ it's purely a deployment-time choice.
 
 ### 📎 The knowledge base: seeded documents, uploads, and selection
 
-Every document in the knowledge base — whether it's one of the four
+Every document in the knowledge base — whether it's one of the ones
 bundled in `data/seed/` (indexed automatically on first startup by
 `seed_data.py`) or something uploaded through the paperclip icon or the
 "+" in the sidebar — goes through the exact same path: `src/documents.py`
@@ -379,7 +379,7 @@ cp .env.example .env
 python app.py             # open http://localhost:8080
 ```
 
-No separate indexing step needed — the four PDFs in `data/seed/` are
+No separate indexing step needed — the PDFs in `data/seed/` are
 indexed automatically the first time `app.py` starts (see `seed_data.py`),
 and stay indexed on every restart after that without redoing the work
 (it skips anything already in the manifest). To index them by hand
@@ -765,7 +765,7 @@ actual stack trace; what the browser sees is deliberately sanitized.
   file actually gets cited in an answer.
 - Extend `eval/run_eval.py`'s testset.json with questions targeting
   uploaded documents specifically (using `document_ids` to scope them) —
-  right now the precision/recall/F1 numbers only reflect the four
+  right now the precision/recall/F1 numbers only reflect the
   bundled `data/seed/` documents.
 
 ---

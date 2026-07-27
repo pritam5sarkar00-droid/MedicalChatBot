@@ -59,6 +59,7 @@
 
 html, body {
   height: 100%;
+  height: 100dvh; /* see the matching h-[100dvh] comment in static/app.jsx's App() */
   margin: 0;
 }
 
