@@ -77,7 +77,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from werkzeug.exceptions import HTTPException
 
 from src.cache import SemanticCache
-from src.helper import resolve_page_display
+from src.helper import resolve_page_display, wait_for_embedding_service
 from src.safety import EMERGENCY_MESSAGE, detect_emergency
 from src.documents import (
     DOCUMENTS_NAMESPACE,
@@ -334,6 +334,25 @@ def create_app(pipeline=None, cache=None, telemetry=None, document_store=None):
     # PDF or an unreachable Pinecone at boot should degrade to "starts up
     # with an empty-ish knowledge base," not "won't start."
     if not pipeline_was_injected and not document_store_was_injected:
+        # In split-service mode (EMBEDDING_SERVICE_URL set), this app and
+        # inference_service/ are two independently-booting processes --
+        # nothing guarantees this one finishes starting up *after* that
+        # one has finished loading its models. Without waiting here first,
+        # a fresh deploy where both happen to boot around the same time
+        # would very likely have every seed document's embedding call fail
+        # (inference_service not listening yet, or listening but still
+        # loading), leaving the knowledge base looking empty until someone
+        # notices and restarts the app -- exactly the "PDFs show up blank,
+        # I have to refresh/restart" symptom this is fixing. A no-op, does
+        # not delay startup at all, when EMBEDDING_SERVICE_URL isn't set
+        # (see wait_for_embedding_service's docstring).
+        if not wait_for_embedding_service():
+            app.logger.warning(
+                "Timed out waiting for the embedding service (EMBEDDING_SERVICE_URL) to become ready — "
+                "attempting to seed the knowledge base anyway; it will likely fail and skip every "
+                "document this run. Restarting the app once the embedding service is confirmed up "
+                "(check its /health endpoint) will retry seeding."
+            )
         try:
             from seed_data import seed_default_documents  # lazy: only needed for this one-time step
 

@@ -179,6 +179,11 @@ const Icon = {
       <path d="M17 8a5 5 0 010 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   ),
+  Stop: (p) => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" {...p}>
+      <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" />
+    </svg>
+  ),
   Copy: (p) => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" {...p}>
       <rect x="9" y="9" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="1.6" />
@@ -316,6 +321,43 @@ function useSidebarWidth() {
   return { width, resizing, startResizing };
 }
 
+function useSpeech() {
+  const [speakingId, setSpeakingId] = useState(null);
+
+  // Only one utterance can ever be playing at a time (speechSynthesis is
+  // a single global engine), so this doubles as both "start reading
+  // message X aloud" and "stop, if X is already the one playing" --
+  // exactly what turns a single Read-aloud button into a toggle instead
+  // of a button that can only ever restart from the beginning with no
+  // way to stop it mid-sentence.
+  const toggle = useCallback(
+    (id, text) => {
+      if (!("speechSynthesis" in window)) return;
+      if (speakingId === id) {
+        window.speechSynthesis.cancel();
+        setSpeakingId(null);
+        return;
+      }
+      window.speechSynthesis.cancel(); // stop whatever else was playing, if anything
+      const utter = new SpeechSynthesisUtterance(stripMarkdown(text));
+      utter.rate = 1;
+      // Guarded with a functional update (only clear if *this* id is
+      // still the one recorded) rather than clearing unconditionally --
+      // cancel() firing onend/onerror for the utterance it just
+      // cancelled is inconsistent across browsers, and without the
+      // guard a late event from an already-superseded utterance could
+      // incorrectly clear the state for whatever's playing now.
+      utter.onend = () => setSpeakingId((current) => (current === id ? null : current));
+      utter.onerror = () => setSpeakingId((current) => (current === id ? null : current));
+      window.speechSynthesis.speak(utter);
+      setSpeakingId(id);
+    },
+    [speakingId]
+  );
+
+  return { speakingId, toggle };
+}
+
 function useVoiceInput(onResult) {
   const recognitionRef = useRef(null);
   const [listening, setListening] = useState(false);
@@ -417,7 +459,7 @@ function HistoryItem({ convo, active, onSelect, onDelete }) {
           e.stopPropagation();
           onDelete();
         }}
-        className="opacity-0 group-hover:opacity-100 text-[var(--sidebar-muted)] hover:text-[var(--alert)] transition-opacity p-0.5 flex-shrink-0"
+        className="opacity-100 md:opacity-0 md:group-hover:opacity-100 text-[var(--sidebar-muted)] hover:text-[var(--alert)] transition-opacity p-0.5 flex-shrink-0"
       >
         <Icon.Trash />
       </button>
@@ -451,7 +493,7 @@ function DocumentItem({ doc, selected, onToggleSelect, onDelete }) {
         title="Remove document"
         aria-label={`Remove ${doc.filename}`}
         onClick={() => onDelete(doc.id)}
-        className="opacity-0 group-hover:opacity-100 text-[var(--sidebar-muted)] hover:text-[var(--alert)] transition-opacity p-0.5 flex-shrink-0"
+        className="opacity-100 md:opacity-0 md:group-hover:opacity-100 text-[var(--sidebar-muted)] hover:text-[var(--alert)] transition-opacity p-0.5 flex-shrink-0"
       >
         <Icon.Trash />
       </button>
@@ -680,17 +722,21 @@ function Sidebar({ theme, onToggleTheme, conversations, activeId, onSelect, onDe
         {/* Drag-to-resize handle -- like a terminal/IDE panel divider.
             Desktop only: mobile shows the sidebar as a fixed full-width-ish
             overlay (see the "open"/"-translate-x-full" branch above),
-            where a user-adjustable width doesn't really apply. The hit
-            area (w-2, straddling the visible border) is deliberately
-            wider than the thin indicator line inside it, so it's easy to
-            grab without looking heavy-handed at rest. */}
+            where a user-adjustable width doesn't really apply.
+            Deliberately right-0 (flush against the inner edge), not a
+            negative offset straddling the border -- the <aside> above
+            has overflow-hidden (required for the collapse animation to
+            clip its fixed-width content instead of squishing it), which
+            would otherwise clip off whichever half of the handle sat
+            outside the aside's own box, leaving a handle that's only
+            partly visible and only partly clickable. */}
         <div
           onPointerDown={onStartResize}
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize sidebar"
           title="Drag to resize"
-          className="hidden md:flex absolute top-0 -right-1 h-full w-2 cursor-col-resize items-center justify-center touch-none select-none group z-10"
+          className="hidden md:flex absolute top-0 right-0 h-full w-2 cursor-col-resize items-center justify-center touch-none select-none group z-10"
         >
           <span
             className={
@@ -765,7 +811,7 @@ function SourceChips({ sources, cached }) {
   );
 }
 
-function MessageActions({ message, onFeedback }) {
+function MessageActions({ message, onFeedback, isSpeaking, onToggleSpeech }) {
   const [copied, setCopied] = useState(false);
   const [rated, setRated] = useState(null);
 
@@ -782,9 +828,13 @@ function MessageActions({ message, onFeedback }) {
   };
 
   return (
-    <div className="flex gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-      <IconButton title="Read aloud" className="w-7 h-7 border-none bg-transparent" onClick={() => speak(message.content)}>
-        <Icon.Speak />
+    <div className="flex gap-1 mt-1.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+      <IconButton
+        title={isSpeaking ? "Stop reading aloud" : "Read aloud"}
+        className={"w-7 h-7 border-none bg-transparent " + (isSpeaking ? "text-[var(--accent)]" : "")}
+        onClick={() => onToggleSpeech(message.id, message.content)}
+      >
+        {isSpeaking ? <Icon.Stop /> : <Icon.Speak />}
       </IconButton>
       <IconButton title={copied ? "Copied!" : "Copy"} className="w-7 h-7 border-none bg-transparent" onClick={handleCopy}>
         {copied ? <Icon.Check /> : <Icon.Copy />}
@@ -813,15 +863,7 @@ function MessageActions({ message, onFeedback }) {
   );
 }
 
-function speak(markdownText) {
-  if (!("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(stripMarkdown(markdownText));
-  utter.rate = 1;
-  window.speechSynthesis.speak(utter);
-}
-
-function Message({ message, onFeedback, isStreaming, onUploadClick }) {
+function Message({ message, onFeedback, isStreaming, onUploadClick, isSpeaking, onToggleSpeech }) {
   const isUser = message.role === "user";
   const isEmergency = !!message.emergency;
   const html = window.marked ? window.marked.parse(message.content || "") : message.content;
@@ -872,7 +914,7 @@ function Message({ message, onFeedback, isStreaming, onUploadClick }) {
                 <Icon.Paperclip /> Upload a PDF about this so I can check it
               </button>
             )}
-            <MessageActions message={message} onFeedback={onFeedback} />
+            <MessageActions message={message} onFeedback={onFeedback} isSpeaking={isSpeaking} onToggleSpeech={onToggleSpeech} />
           </>
         )}
       </div>
@@ -1361,6 +1403,7 @@ function App() {
   const fileInputRef = useRef(null);
 
   const voice = useVoiceInput((transcript) => setInputValue(transcript));
+  const speech = useSpeech();
 
   const fetchDocuments = useCallback(() => {
     fetch(apiUrl("/documents"))
@@ -1805,7 +1848,14 @@ function App() {
 
             <div className="flex flex-col gap-5 pb-4">
               {messages.map((m) => (
-                <Message key={m.id} message={m} onFeedback={handleFeedback} onUploadClick={triggerUpload} />
+                <Message
+                  key={m.id}
+                  message={m}
+                  onFeedback={handleFeedback}
+                  onUploadClick={triggerUpload}
+                  isSpeaking={speech.speakingId === m.id}
+                  onToggleSpeech={speech.toggle}
+                />
               ))}
 
               {isStreamingHere &&

@@ -171,6 +171,57 @@ def _remote_auth_headers() -> dict:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
+def wait_for_embedding_service(timeout_s: float = 90, poll_interval_s: float = 3) -> bool:
+    """Blocks until inference_service's GET /health reports its models are
+    loaded, or timeout_s elapses -- whichever comes first. Returns whether
+    it actually became ready.
+
+    Only meant to be called once, at app startup, immediately before
+    seed_data.py's one-time seeding step -- see create_app() in app.py.
+    Without this, seeding a fresh deploy in split-service mode is a race:
+    if the main app happens to boot faster than inference_service finishes
+    loading its two models (which can take anywhere from a few seconds to
+    ~40s -- see inference_service/app.py's _load_models()), every seed
+    document's embedding call fails, seed_data.py logs and skips each one
+    (by design -- see its own docstring), and the app starts with an
+    empty-looking knowledge base until someone notices and restarts it.
+    Waiting here first turns that from "usually works, occasionally
+    doesn't, silently" into "boots a little slower the first time, but
+    reliably has its documents."
+
+    A no-op returning True immediately if EMBEDDING_SERVICE_URL isn't set
+    at all -- there's no separate service to wait for when embeddings run
+    in-process (the default, single-service setup).
+
+    Deliberately bounded rather than waiting forever: a genuinely
+    unreachable or misconfigured inference_service (wrong URL, service
+    never actually deployed, firewalled) would otherwise hang the main
+    app's startup indefinitely. After timeout_s, this gives up and returns
+    False -- create_app() still proceeds either way (see its docstring),
+    it just logs which happened, and the seeding attempt that follows will
+    fail-and-skip the same way it always has if the service still isn't
+    reachable by then.
+    """
+    base_url = _embedding_service_url()
+    if not base_url:
+        return True
+
+    import time
+
+    import requests
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            resp = requests.get(f"{base_url}/health", timeout=5)
+            if resp.ok and resp.json().get("models_loaded"):
+                return True
+        except requests.RequestException:
+            pass  # not up yet (or still mid-boot) -- keep polling until the deadline
+        time.sleep(poll_interval_s)
+    return False
+
+
 class RemoteEmbeddings(Embeddings):
     """
     Talks to inference_service's POST /embed instead of loading
@@ -186,10 +237,12 @@ class RemoteEmbeddings(Embeddings):
         self._base_url = base_url
 
     def _post(self, texts: List[str]) -> List[List[float]]:
+        import time
+
         import requests
 
         last_error: Optional[Exception] = None
-        for _attempt in range(2):  # one retry, to ride out a cold start
+        for attempt in range(2):
             try:
                 resp = requests.post(
                     f"{self._base_url}/embed",
@@ -201,6 +254,8 @@ class RemoteEmbeddings(Embeddings):
                 return resp.json()["embeddings"]
             except requests.RequestException as exc:
                 last_error = exc
+                if attempt == 0:
+                    time.sleep(1)  # a brief transient blip, not a cold start (see wait_for_embedding_service for that)
         raise RuntimeError(f"embedding service at {self._base_url} did not respond: {last_error}")
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
@@ -225,6 +280,8 @@ class RemoteReranker:
         self._base_url = base_url
 
     def predict(self, pairs) -> List[float]:
+        import time
+
         import requests
 
         pairs = list(pairs)
@@ -233,7 +290,7 @@ class RemoteReranker:
         query = pairs[0][0]
         documents = [text for _, text in pairs]
         last_error: Optional[Exception] = None
-        for _attempt in range(2):
+        for attempt in range(2):
             try:
                 resp = requests.post(
                     f"{self._base_url}/rerank",
@@ -245,6 +302,8 @@ class RemoteReranker:
                 return resp.json()["scores"]
             except requests.RequestException as exc:
                 last_error = exc
+                if attempt == 0:
+                    time.sleep(1)
         raise RuntimeError(f"reranker service at {self._base_url} did not respond: {last_error}")
 
 

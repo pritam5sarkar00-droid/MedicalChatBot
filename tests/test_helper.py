@@ -1,6 +1,6 @@
 from langchain_core.documents import Document
 
-from src.helper import filter_to_minimal_docs
+from src.helper import filter_to_minimal_docs, wait_for_embedding_service
 
 
 def test_filter_to_minimal_docs_preserves_source_page_and_page_label():
@@ -47,3 +47,113 @@ def test_filter_to_minimal_docs_handles_missing_page():
 
 def test_filter_to_minimal_docs_handles_empty_list():
     assert filter_to_minimal_docs([]) == []
+
+
+# ---------------------------------------------------------------------------
+# wait_for_embedding_service -- see its docstring in src/helper.py for the
+# startup-race it fixes: seed_data.py's one-time seeding step running
+# before a freshly-booting inference_service/ has finished loading its
+# models, silently skipping every document and leaving the knowledge base
+# looking empty until someone notices and restarts the app.
+# ---------------------------------------------------------------------------
+
+
+def test_returns_true_immediately_when_no_embedding_service_url_is_set(monkeypatch):
+    """Single-service mode (embeddings run in-process): there's no
+    separate service to wait for, so this must be an instant no-op, never
+    adding startup delay for the far more common non-split deployment."""
+    monkeypatch.delenv("EMBEDDING_SERVICE_URL", raising=False)
+
+    import time
+
+    start = time.monotonic()
+    result = wait_for_embedding_service(timeout_s=5, poll_interval_s=1)
+    elapsed = time.monotonic() - start
+
+    assert result is True
+    assert elapsed < 0.5
+
+
+def test_returns_true_once_health_reports_models_loaded(monkeypatch):
+    """The realistic case this whole function exists for: the service is
+    up but still mid-boot when the wait starts, and finishes loading its
+    models a couple seconds in -- this should notice and return as soon
+    as that happens, not only at the timeout."""
+    import threading
+    import time
+
+    from flask import Flask, jsonify
+
+    health_app = Flask(__name__)
+    state = {"ready": False}
+
+    @health_app.route("/health")
+    def health():
+        return jsonify({"status": "ok" if state["ready"] else "loading", "models_loaded": state["ready"]})
+
+    port = 8199
+    thread = threading.Thread(
+        target=lambda: health_app.run(host="127.0.0.1", port=port, use_reloader=False), daemon=True
+    )
+    thread.start()
+    time.sleep(0.5)
+
+    def become_ready_shortly():
+        time.sleep(1)
+        state["ready"] = True
+
+    threading.Thread(target=become_ready_shortly, daemon=True).start()
+
+    monkeypatch.setenv("EMBEDDING_SERVICE_URL", f"http://127.0.0.1:{port}")
+
+    start = time.monotonic()
+    result = wait_for_embedding_service(timeout_s=15, poll_interval_s=0.3)
+    elapsed = time.monotonic() - start
+
+    assert result is True
+    assert 0.8 < elapsed < 10  # noticed it becoming ready, didn't just wait for the full timeout
+
+
+def test_returns_false_after_timeout_when_never_ready(monkeypatch):
+    """A service that's reachable but stuck (still loading, or reporting
+    unhealthy) must not hang the app's startup forever -- give up after
+    timeout_s and let the caller (create_app() in app.py) proceed anyway,
+    logging that it timed out rather than blocking indefinitely."""
+    import threading
+    import time
+
+    from flask import Flask, jsonify
+
+    health_app = Flask(__name__)
+
+    @health_app.route("/health")
+    def health():
+        return jsonify({"status": "loading", "models_loaded": False})
+
+    port = 8200
+    thread = threading.Thread(
+        target=lambda: health_app.run(host="127.0.0.1", port=port, use_reloader=False), daemon=True
+    )
+    thread.start()
+    time.sleep(0.5)
+
+    monkeypatch.setenv("EMBEDDING_SERVICE_URL", f"http://127.0.0.1:{port}")
+
+    start = time.monotonic()
+    result = wait_for_embedding_service(timeout_s=2, poll_interval_s=0.3)
+    elapsed = time.monotonic() - start
+
+    assert result is False
+    assert elapsed >= 1.8  # actually waited out the timeout, not an early bail
+
+
+def test_returns_false_gracefully_when_service_is_unreachable(monkeypatch):
+    """A wrong URL, or the service never having been deployed at all,
+    must degrade the same way as "reachable but never ready" -- a
+    connection failure on every poll, not an unhandled exception that
+    would crash app startup."""
+    monkeypatch.setenv("EMBEDDING_SERVICE_URL", "http://127.0.0.1:1")  # port 1: nothing listens here
+
+    result = wait_for_embedding_service(timeout_s=2, poll_interval_s=0.3)
+
+    assert result is False
