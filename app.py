@@ -67,6 +67,7 @@ import json
 import os
 import re
 import time
+import requests
 
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
@@ -89,6 +90,12 @@ from src.documents import (
 )
 
 load_dotenv()
+
+url = "https://medicalchatbot-92ty.onrender.com/"
+response = requests.get(url)
+
+print(response.status_code)
+print(response.text)
 
 GENERIC_ERROR_MESSAGE = "Something went wrong on our end. Please try again in a moment."
 
