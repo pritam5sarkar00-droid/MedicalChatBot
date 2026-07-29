@@ -53,6 +53,7 @@ across restarts, not just until the free-tier host happens to sleep.
 
 import os
 import re
+from typing import List
 
 from src.documents import DOCUMENTS_NAMESPACE, ingest_pdf
 
@@ -71,6 +72,51 @@ def _seed_doc_id(filename: str) -> str:
     stem = os.path.splitext(filename)[0]
     slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-")
     return f"seed-{slug}"[:32]
+
+
+def _pending_seed_files(seed_dir: str, document_store) -> List[str]:
+    """The filenames in seed_dir that seed_default_documents() would
+    actually attempt to index right now -- not already in the manifest,
+    not deliberately deleted before, actually a .pdf. Shared by
+    has_pending_seed_documents() (a cheap yes/no a caller can check
+    *before* paying any cost to seed) and seed_default_documents() itself
+    (which does the real work), so the two can never quietly disagree
+    about what counts as "needs seeding."
+    """
+    if not os.path.isdir(seed_dir):
+        return []
+
+    already_present = {d["filename"] for d in document_store.list_documents()}
+    pending = []
+    for filename in sorted(os.listdir(seed_dir)):
+        if not filename.lower().endswith(".pdf"):
+            continue
+        if filename in already_present:
+            continue
+        if document_store.was_deleted(_seed_doc_id(filename)):
+            continue
+        pending.append(filename)
+    return pending
+
+
+def has_pending_seed_documents(document_store, seed_dir: str = SEED_DIR) -> bool:
+    """Cheap check -- one document_store.list_documents() call, no
+    Pinecone/embedding-service traffic at all -- for whether
+    seed_default_documents() would actually have anything to do.
+
+    Meant to be checked *before* paying for anything expensive on the way
+    to seeding, most importantly waiting for a separate inference_service/
+    deployment to report healthy (see wait_for_embedding_service() in
+    src/helper.py). Without this check, create_app() would wait on that
+    every single time the app starts -- including every time a free-tier
+    host wakes it from an idle sleep, which can easily be most of its
+    restarts -- even though, almost always by then, every seed document
+    is already indexed and there is nothing whatsoever left to seed. That
+    turns a should-be-instant restart into one that's slow for no reason,
+    which is exactly backwards from the free-tier cold-start experience
+    this project is trying to keep tolerable.
+    """
+    return bool(_pending_seed_files(seed_dir, document_store))
 
 
 def seed_default_documents(vectorstore, document_store, seed_dir: str = SEED_DIR) -> int:
@@ -96,22 +142,11 @@ def seed_default_documents(vectorstore, document_store, seed_dir: str = SEED_DIR
     down with them. One bad file just means one fewer document seeded,
     not zero.
     """
-    if not os.path.isdir(seed_dir):
-        return 0
-
-    already_present = {d["filename"] for d in document_store.list_documents()}
+    pending = _pending_seed_files(seed_dir, document_store)
     seeded_count = 0
 
-    for filename in sorted(os.listdir(seed_dir)):
-        if not filename.lower().endswith(".pdf"):
-            continue
-        if filename in already_present:
-            continue
-
+    for filename in pending:
         doc_id = _seed_doc_id(filename)
-        if document_store.was_deleted(doc_id):
-            continue  # deliberately removed from the UI before -- stays removed
-
         path = os.path.join(seed_dir, filename)
         try:
             chunks, vector_ids = ingest_pdf(doc_id, path, filename)

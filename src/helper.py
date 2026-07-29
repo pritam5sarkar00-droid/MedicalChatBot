@@ -171,7 +171,51 @@ def _remote_auth_headers() -> dict:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
-def wait_for_embedding_service(timeout_s: float = 90, poll_interval_s: float = 3) -> bool:
+def warm_up_embedding_service_async() -> None:
+    """Fires a single best-effort GET /health at the embedding service on
+    a background thread and returns immediately -- called unconditionally,
+    as the very first thing create_app() does (app.py), specifically so
+    the inference service starts waking up from the moment the main app
+    starts, in parallel with everything else create_app() does, rather
+    than sitting asleep until the first real chat message happens to be
+    what wakes it (which is also exactly the request that message would
+    then have to wait through the cold start on).
+
+    This is deliberately NOT the same thing as wait_for_embedding_service()
+    above, and calling this doesn't make that one unnecessary:
+      - This one never blocks anything and never reports whether it
+        worked -- it's a nudge, not a guarantee. It exists to shorten a
+        cold start that's about to happen anyway, not to prevent one.
+      - wait_for_embedding_service() is the actual guarantee ("don't
+        attempt to seed until this confirms ready") for the one moment
+        that genuinely needs one -- see has_pending_seed_documents() in
+        seed_data.py for why it's only paid for when there's something
+        to seed, and see this function's docstring's opening paragraph
+        for why paying it unconditionally on every restart would work
+        against a fast cold start rather than for one.
+
+    A true no-op, not even spawning a thread, when EMBEDDING_SERVICE_URL
+    isn't set -- there's no separate service to wake up when embeddings
+    run in-process.
+    """
+    base_url = _embedding_service_url()
+    if not base_url:
+        return
+
+    def _ping():
+        try:
+            import requests
+
+            requests.get(f"{base_url}/health", timeout=10)
+        except requests.RequestException:
+            pass  # exactly what this is for: a sleeping/cold-starting service refusing the very first ping is expected, not an error
+
+    import threading
+
+    threading.Thread(target=_ping, daemon=True).start()
+
+
+def wait_for_embedding_service(timeout_s: float = 150, poll_interval_s: float = 3) -> bool:
     """Blocks until inference_service's GET /health reports its models are
     loaded, or timeout_s elapses -- whichever comes first. Returns whether
     it actually became ready.

@@ -16,7 +16,7 @@ import pytest
 
 from src.document_store import InMemoryDocumentStore
 from src.documents import DOCUMENTS_NAMESPACE
-from seed_data import SEED_DIR, _seed_doc_id, seed_default_documents
+from seed_data import SEED_DIR, _seed_doc_id, has_pending_seed_documents, seed_default_documents
 
 
 class FakeVectorStore:
@@ -59,6 +59,85 @@ def test_seed_doc_id_matches_every_file_actually_bundled_in_data_seed():
 @pytest.fixture
 def fresh_stores():
     return FakeVectorStore(), InMemoryDocumentStore()
+
+
+# ---------------------------------------------------------------------------
+# has_pending_seed_documents -- the cheap check create_app() (app.py) makes
+# *before* deciding whether to pay for wait_for_embedding_service() at all.
+# See its docstring for exactly which real-world slowdown this avoids.
+# ---------------------------------------------------------------------------
+
+
+def test_pending_is_true_on_an_empty_manifest(fresh_stores):
+    _, document_store = fresh_stores
+    assert has_pending_seed_documents(document_store) is True
+
+
+def test_pending_is_false_once_everything_is_already_seeded(fresh_stores):
+    """The realistic steady-state on a free-tier host: this is checked on
+    every single restart (including every wake from an idle sleep), and
+    almost always finds nothing pending -- that's the whole point of
+    checking first instead of unconditionally waiting on the inference
+    service every time."""
+    vectorstore, document_store = fresh_stores
+    seed_default_documents(vectorstore, document_store)
+
+    assert has_pending_seed_documents(document_store) is False
+
+
+def test_pending_is_true_again_after_a_seeded_document_is_deleted(fresh_stores):
+    vectorstore, document_store = fresh_stores
+    seed_default_documents(vectorstore, document_store)
+    some_id = document_store.list_documents()[0]["id"]
+    document_store.delete_document(some_id)
+    # Deliberately not calling mark_deleted() here -- this simulates a
+    # manifest row disappearing without a matching tombstone (shouldn't
+    # normally happen via the real DELETE route, which always sets both --
+    # see app.py -- but the two are independent facts in document_store,
+    # and this document going missing from the manifest, tombstoned or
+    # not, should always make it "pending" again either way).
+
+    assert has_pending_seed_documents(document_store) is True
+
+
+def test_pending_is_false_for_a_deliberately_deleted_document_even_though_its_manifest_row_is_gone(fresh_stores):
+    """The other half of the same fact: a document that's gone from the
+    manifest *because it was deliberately deleted* (mark_deleted() was
+    also called -- the real DELETE route always does both, see app.py)
+    must NOT count as pending, or a deletion would make the app wait on
+    the inference service and then silently re-add it right back."""
+    vectorstore, document_store = fresh_stores
+    seed_default_documents(vectorstore, document_store)
+    doomed = document_store.list_documents()[0]
+    document_store.delete_document(doomed["id"])
+    document_store.mark_deleted(doomed["id"])
+
+    remaining_pending = has_pending_seed_documents(document_store)
+    real_pdf_count = len([f for f in os.listdir(SEED_DIR) if f.lower().endswith(".pdf")])
+    if real_pdf_count > 1:
+        # Every *other* seed document is still present and un-deleted, so
+        # there's nothing pending overall -- this one deletion shouldn't
+        # make the check say "yes, something needs seeding."
+        assert remaining_pending is False
+    # (if there's only a single seed PDF total, deleting the only one
+    # trivially leaves nothing else that could be "pending" either way,
+    # so this assertion would be vacuous -- the real content in
+    # data/seed/ has several, so this branch is what actually runs)
+
+
+def test_pending_matches_what_seed_default_documents_would_actually_do(fresh_stores):
+    """has_pending_seed_documents() and seed_default_documents() must
+    never quietly disagree -- both are built on the same
+    _pending_seed_files() helper specifically so that can't happen (see
+    that function's docstring), but this asserts the observable contract
+    a caller actually relies on, not just the shared implementation."""
+    vectorstore, document_store = fresh_stores
+    assert has_pending_seed_documents(document_store) is True
+
+    seeded_count = seed_default_documents(vectorstore, document_store)
+
+    assert seeded_count > 0  # confirms the "True" above wasn't vacuous
+    assert has_pending_seed_documents(document_store) is False
 
 
 def test_seeds_every_pdf_in_the_real_seed_directory(fresh_stores):

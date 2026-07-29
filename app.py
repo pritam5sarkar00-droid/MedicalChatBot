@@ -67,7 +67,6 @@ import json
 import os
 import re
 import time
-import requests
 
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
@@ -78,7 +77,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from werkzeug.exceptions import HTTPException
 
 from src.cache import SemanticCache
-from src.helper import resolve_page_display, wait_for_embedding_service
+from src.helper import resolve_page_display, wait_for_embedding_service, warm_up_embedding_service_async
 from src.safety import EMERGENCY_MESSAGE, detect_emergency
 from src.documents import (
     DOCUMENTS_NAMESPACE,
@@ -90,12 +89,6 @@ from src.documents import (
 )
 
 load_dotenv()
-
-url = "https://medicalchatbot-92ty.onrender.com/"
-response = requests.get(url)
-
-print(response.status_code)
-print(response.text)
 
 GENERIC_ERROR_MESSAGE = "Something went wrong on our end. Please try again in a moment."
 
@@ -254,6 +247,18 @@ def create_app(pipeline=None, cache=None, telemetry=None, document_store=None):
     pipeline_was_injected = pipeline is not None
     document_store_was_injected = document_store is not None
 
+    if not pipeline_was_injected and not document_store_was_injected:
+        # Fired before anything else below -- including before building
+        # the pipeline itself -- so that if EMBEDDING_SERVICE_URL points
+        # at a separate inference_service/ deployment that's currently
+        # asleep (a very ordinary state for a free-tier host that hasn't
+        # had a chat request in a while), it starts waking up right now,
+        # in parallel with the rest of this function, instead of staying
+        # asleep until the first real chat message is what finally wakes
+        # it -- see warm_up_embedding_service_async()'s docstring for
+        # exactly what this does and doesn't guarantee.
+        warm_up_embedding_service_async()
+
     app = Flask(__name__)
 
     # Defense in depth alongside src/documents.py's own size check: Flask
@@ -341,31 +346,44 @@ def create_app(pipeline=None, cache=None, telemetry=None, document_store=None):
     # PDF or an unreachable Pinecone at boot should degrade to "starts up
     # with an empty-ish knowledge base," not "won't start."
     if not pipeline_was_injected and not document_store_was_injected:
-        # In split-service mode (EMBEDDING_SERVICE_URL set), this app and
-        # inference_service/ are two independently-booting processes --
-        # nothing guarantees this one finishes starting up *after* that
-        # one has finished loading its models. Without waiting here first,
-        # a fresh deploy where both happen to boot around the same time
-        # would very likely have every seed document's embedding call fail
-        # (inference_service not listening yet, or listening but still
-        # loading), leaving the knowledge base looking empty until someone
-        # notices and restarts the app -- exactly the "PDFs show up blank,
-        # I have to refresh/restart" symptom this is fixing. A no-op, does
-        # not delay startup at all, when EMBEDDING_SERVICE_URL isn't set
-        # (see wait_for_embedding_service's docstring).
-        if not wait_for_embedding_service():
-            app.logger.warning(
-                "Timed out waiting for the embedding service (EMBEDDING_SERVICE_URL) to become ready — "
-                "attempting to seed the knowledge base anyway; it will likely fail and skip every "
-                "document this run. Restarting the app once the embedding service is confirmed up "
-                "(check its /health endpoint) will retry seeding."
-            )
         try:
-            from seed_data import seed_default_documents  # lazy: only needed for this one-time step
+            from seed_data import has_pending_seed_documents, seed_default_documents  # lazy: only needed here
 
-            seeded = seed_default_documents(pipeline.vectorstore, document_store)
-            if seeded:
-                app.logger.info("Seeded %d default document(s) into the knowledge base", seeded)
+            # Checked *before* anything expensive below: on a free-tier
+            # host, "app restarts" mostly means "woke up from an idle
+            # sleep," which happens far more often than "genuinely fresh
+            # deploy with nothing indexed yet." Once the initial seed has
+            # succeeded once, every document is already in the manifest on
+            # every restart after that -- so without this check, every one
+            # of those ordinary wake-ups would still pay for the
+            # wait_for_embedding_service() call below for literally
+            # nothing, adding to exactly the cold-start delay a free-tier
+            # deployment can least afford.
+            if has_pending_seed_documents(document_store):
+                # In split-service mode (EMBEDDING_SERVICE_URL set), this
+                # app and inference_service/ are two independently-booting
+                # processes -- nothing guarantees this one finishes
+                # starting up *after* that one has finished loading its
+                # models. Without waiting here first, a fresh deploy where
+                # both happen to boot around the same time would very
+                # likely have every seed document's embedding call fail
+                # (inference_service not listening yet, or listening but
+                # still loading), leaving the knowledge base looking empty
+                # until someone notices and restarts the app -- exactly
+                # the "PDFs show up blank, I have to refresh/restart"
+                # symptom this is fixing. A no-op, does not delay startup
+                # at all, when EMBEDDING_SERVICE_URL isn't set (see
+                # wait_for_embedding_service's docstring).
+                if not wait_for_embedding_service():
+                    app.logger.warning(
+                        "Timed out waiting for the embedding service (EMBEDDING_SERVICE_URL) to become "
+                        "ready — attempting to seed the knowledge base anyway; it will likely fail and "
+                        "skip every pending document this run. Restarting the app once the embedding "
+                        "service is confirmed up (check its /health endpoint) will retry seeding."
+                    )
+                seeded = seed_default_documents(pipeline.vectorstore, document_store)
+                if seeded:
+                    app.logger.info("Seeded %d default document(s) into the knowledge base", seeded)
         except Exception:
             app.logger.exception("Seeding default documents failed — continuing without them")
 

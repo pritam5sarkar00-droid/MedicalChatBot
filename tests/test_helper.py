@@ -1,6 +1,6 @@
 from langchain_core.documents import Document
 
-from src.helper import filter_to_minimal_docs, wait_for_embedding_service
+from src.helper import filter_to_minimal_docs, wait_for_embedding_service, warm_up_embedding_service_async
 
 
 def test_filter_to_minimal_docs_preserves_source_page_and_page_label():
@@ -157,3 +157,71 @@ def test_returns_false_gracefully_when_service_is_unreachable(monkeypatch):
     result = wait_for_embedding_service(timeout_s=2, poll_interval_s=0.3)
 
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# warm_up_embedding_service_async -- the complementary, non-blocking nudge
+# fired unconditionally at the very start of create_app() (app.py), so a
+# sleeping inference_service/ starts waking up immediately rather than
+# waiting for the first real chat message to trigger that.
+# ---------------------------------------------------------------------------
+
+
+def test_is_a_true_no_op_with_no_embedding_service_url(monkeypatch):
+    import threading
+    import time
+
+    monkeypatch.delenv("EMBEDDING_SERVICE_URL", raising=False)
+    threads_before = threading.active_count()
+
+    start = time.monotonic()
+    warm_up_embedding_service_async()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.05  # returned instantly
+    assert threading.active_count() == threads_before  # didn't even spawn a thread
+
+
+def test_never_blocks_even_against_a_slow_to_respond_service(monkeypatch):
+    """The whole point: this must return immediately regardless of how
+    long the actual ping takes to complete in the background -- a slow
+    cold start on the other end should never be something create_app()
+    waits on here (that's wait_for_embedding_service()'s job, and only
+    when seeding actually needs it)."""
+    import threading
+    import time
+
+    from flask import Flask, jsonify
+
+    slow_app = Flask(__name__)
+
+    @slow_app.route("/health")
+    def health():
+        time.sleep(2)
+        return jsonify({"status": "ok", "models_loaded": True})
+
+    port = 8299
+    thread = threading.Thread(
+        target=lambda: slow_app.run(host="127.0.0.1", port=port, use_reloader=False), daemon=True
+    )
+    thread.start()
+    time.sleep(0.5)
+
+    monkeypatch.setenv("EMBEDDING_SERVICE_URL", f"http://127.0.0.1:{port}")
+
+    start = time.monotonic()
+    warm_up_embedding_service_async()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.5  # nowhere near the 2s the health check itself takes
+    time.sleep(2.5)  # let the background thread's ping actually complete, for a clean test teardown
+
+
+def test_never_raises_even_when_the_service_is_unreachable(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_SERVICE_URL", "http://127.0.0.1:1")
+
+    warm_up_embedding_service_async()  # should not raise, in this thread or the background one
+
+    import time
+
+    time.sleep(0.5)  # let the background thread's failed attempt complete silently before the test exits
