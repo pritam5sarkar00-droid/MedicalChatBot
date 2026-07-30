@@ -358,6 +358,88 @@ function useSpeech() {
   return { speakingId, toggle };
 }
 
+// Polls GET /ready (app.py) until the backend -- including the embedding
+// service, when EMBEDDING_SERVICE_URL points this app at a separate
+// inference_service/ deployment -- confirms it's actually able to answer
+// a question, not just that the main app process is up. See WakingUpScreen
+// below, which is what's shown while state is anything other than "ready".
+//
+// Deliberately its own endpoint rather than reusing whatever /documents or
+// /stats would tell us: those can succeed even while the embedding service
+// is still cold-starting (listing documents doesn't need it), which would
+// have shown the normal chat UI right as it's about to accept a message it
+// can't actually answer yet.
+function useBackendReady() {
+  const [state, setState] = useState("checking"); // "checking" | "slow" | "ready" | "gave_up"
+
+  useEffect(() => {
+    let cancelled = false;
+    let attempt = 0;
+    const startedAt = Date.now();
+
+    async function poll() {
+      if (cancelled) return;
+      attempt += 1;
+      try {
+        const res = await fetch(apiUrl("/ready"));
+        if (cancelled) return;
+        if (res.ok) {
+          const data = await res.json();
+          if (data.ready) {
+            setState("ready");
+            return;
+          }
+        }
+      } catch (e) {
+        // The main app itself can be mid-cold-start too (this same
+        // request is what wakes it, on a free-tier host) -- indistinguishable
+        // from here, and handled identically: keep polling.
+      }
+      if (cancelled) return;
+
+      const elapsed = Date.now() - startedAt;
+      if (elapsed > 3 * 60 * 1000) {
+        // Given up waiting for confirmation, but this does NOT mean
+        // something is broken -- rather than trap someone on a loading
+        // screen indefinitely over what's most likely just a slow first
+        // request, let them into the app; WakingUpScreen's "gave_up"
+        // state (folded into the normal chat UI, not a blocking screen)
+        // says so plainly rather than pretending everything's confirmed
+        // fine.
+        setState("gave_up");
+        return;
+      }
+      setState(elapsed > 10000 ? "slow" : "checking");
+      setTimeout(poll, attempt <= 10 ? 3000 : 5000);
+    }
+
+    poll();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return state;
+}
+
+function WakingUpScreen({ slow }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center gap-4 px-6 text-center">
+      <div className="w-10 h-10 rounded-full border-2 border-[var(--border)] border-t-[var(--accent)] animate-spin" />
+      <div className="max-w-xs">
+        <p className="text-[14.5px] font-medium text-[var(--ink)]">
+          {slow ? "Still waking up…" : "Starting up…"}
+        </p>
+        <p className="text-[12.5px] text-[var(--muted)] mt-1.5 leading-relaxed">
+          {slow
+            ? "Free hosting spins down when it's quiet, so the first visit after a while takes a bit longer. Almost there."
+            : "Connecting to MediCare AI."}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function useVoiceInput(onResult) {
   const recognitionRef = useRef(null);
   const [listening, setListening] = useState(false);
@@ -1403,6 +1485,7 @@ function App() {
   const fileInputRef = useRef(null);
 
   const voice = useVoiceInput((transcript) => setInputValue(transcript));
+  const backendReady = useBackendReady();
   const speech = useSpeech();
 
   const fetchDocuments = useCallback(() => {
@@ -1842,48 +1925,54 @@ function App() {
 
         <EmergencyBanner show={emergencyActive} />
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-6 pt-4 chat-scroll">
-          <div className="max-w-[760px] mx-auto">
-            {showHero && <Hero onSuggestionClick={sendMessage} onUploadClick={triggerUpload} />}
+        {backendReady === "checking" || backendReady === "slow" ? (
+          <WakingUpScreen slow={backendReady === "slow"} />
+        ) : (
+          <>
+            <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-6 pt-4 chat-scroll">
+              <div className="max-w-[760px] mx-auto">
+                {showHero && <Hero onSuggestionClick={sendMessage} onUploadClick={triggerUpload} />}
 
-            <div className="flex flex-col gap-5 pb-4">
-              {messages.map((m) => (
-                <Message
-                  key={m.id}
-                  message={m}
-                  onFeedback={handleFeedback}
-                  onUploadClick={triggerUpload}
-                  isSpeaking={speech.speakingId === m.id}
-                  onToggleSpeech={speech.toggle}
-                />
-              ))}
+                <div className="flex flex-col gap-5 pb-4">
+                  {messages.map((m) => (
+                    <Message
+                      key={m.id}
+                      message={m}
+                      onFeedback={handleFeedback}
+                      onUploadClick={triggerUpload}
+                      isSpeaking={speech.speakingId === m.id}
+                      onToggleSpeech={speech.toggle}
+                    />
+                  ))}
 
-              {isStreamingHere &&
-                (streamingDraft.started ? (
-                  <Message message={{ role: "bot", ...streamingDraft }} onFeedback={handleFeedback} isStreaming />
-                ) : (
-                  <TypingIndicator />
-                ))}
+                  {isStreamingHere &&
+                    (streamingDraft.started ? (
+                      <Message message={{ role: "bot", ...streamingDraft }} onFeedback={handleFeedback} isStreaming />
+                    ) : (
+                      <TypingIndicator />
+                    ))}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        {uploadNotices.length > 0 && (
-          <div className="max-w-[760px] w-full mx-auto px-4 md:px-6 flex flex-col gap-2 pb-1">
-            {uploadNotices.map((notice) => (
-              <UploadNotice key={notice.id} notice={notice} onDismiss={() => dismissUploadNotice(notice.id)} />
-            ))}
-          </div>
+            {uploadNotices.length > 0 && (
+              <div className="max-w-[760px] w-full mx-auto px-4 md:px-6 flex flex-col gap-2 pb-1">
+                {uploadNotices.map((notice) => (
+                  <UploadNotice key={notice.id} notice={notice} onDismiss={() => dismissUploadNotice(notice.id)} />
+                ))}
+              </div>
+            )}
+
+            <Composer
+              value={inputValue}
+              onChange={setInputValue}
+              onSubmit={() => sendMessage(inputValue)}
+              voice={voice}
+              onAttachClick={triggerUpload}
+              uploading={uploadingCount > 0}
+            />
+          </>
         )}
-
-        <Composer
-          value={inputValue}
-          onChange={setInputValue}
-          onSubmit={() => sendMessage(inputValue)}
-          voice={voice}
-          onAttachClick={triggerUpload}
-          uploading={uploadingCount > 0}
-        />
       </main>
       )}
     </div>

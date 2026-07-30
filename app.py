@@ -414,6 +414,51 @@ def create_app(pipeline=None, cache=None, telemetry=None, document_store=None):
     def health():
         return jsonify({"status": "ok"})
 
+    @app.route("/ready")
+    def ready():
+        """A slower, more thorough cousin of /health above -- checks
+        whether the embedding service (EMBEDDING_SERVICE_URL, when the
+        split deployment is in use -- see DEPLOYMENT.md) is actually
+        reachable and has finished loading its models, not just whether
+        this process itself is up.
+
+        Deliberately a *separate* endpoint rather than folding this check
+        into /health: Render's own platform monitoring polls /health to
+        decide whether this service is alive, and needs that to stay a
+        fast, simple, always-succeeds check -- making it depend on an
+        outbound network call to a second service (one that can be slow
+        or briefly down for entirely normal reasons, like waking up from
+        its own idle sleep) risks Render concluding this app itself is
+        unhealthy for a completely unrelated reason.
+
+        This one is for static/app.jsx to poll instead, specifically on
+        first load, so the frontend can show a clear "waking up" state
+        instead of silently sitting on an empty document list (or,
+        worse, accepting a chat message into a slow, unexplained wait)
+        while the backend is still cold-starting -- see useBackendReady()
+        and WakingUpScreen there.
+        """
+        embedding_url = os.environ.get("EMBEDDING_SERVICE_URL", "").strip().rstrip("/")
+        if not embedding_url:
+            # Single-service mode: embeddings run in this same process,
+            # so there's no second service to wait on at all.
+            return jsonify({"ready": True, "embedding_service": "not_configured"})
+
+        try:
+            import requests
+
+            resp = requests.get(f"{embedding_url}/health", timeout=4)
+            if resp.ok and resp.json().get("models_loaded"):
+                return jsonify({"ready": True, "embedding_service": "ready"})
+            return jsonify({"ready": False, "embedding_service": "starting"})
+        except Exception:
+            # Covers both "still waking up from sleep, not accepting
+            # connections yet" and "genuinely misconfigured/down" the
+            # same way -- static/app.jsx's polling loop can't tell those
+            # apart from out here either way, and treats both identically
+            # (keep waiting, with a friendlier message after a while).
+            return jsonify({"ready": False, "embedding_service": "unreachable"})
+
     @app.route("/stats")
     def stats():
         """Powers both the plain-JSON /stats API and the Dashboard view in
