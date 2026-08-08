@@ -55,9 +55,7 @@ import os
 import re
 from typing import List
 
-from src.documents import DOCUMENTS_NAMESPACE, ingest_pdf
-
-SEED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "seed")
+from src.documents import DOCUMENTS_NAMESPACE, SEED_DIR, ingest_pdf
 
 
 def _seed_doc_id(filename: str) -> str:

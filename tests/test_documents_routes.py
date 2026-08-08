@@ -257,6 +257,59 @@ def test_list_documents_reflects_the_manifest(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# GET /documents/<id>/file
+# ---------------------------------------------------------------------------
+
+
+def test_view_file_serves_a_real_uploaded_pdf_inline(small_real_pdf_bytes, tmp_path, monkeypatch):
+    client, _, _ = make_client(upload_dir=tmp_path, monkeypatch=monkeypatch)
+    upload_res = client.post(
+        "/documents/upload",
+        data={"file": (io.BytesIO(small_real_pdf_bytes), "my_report.pdf")},
+        content_type="multipart/form-data",
+    )
+    doc_id = upload_res.get_json()["document"]["id"]
+
+    res = client.get(f"/documents/{doc_id}/file")
+
+    assert res.status_code == 200
+    assert res.content_type == "application/pdf"
+    # inline, not attachment -- clicking a document should open it in the
+    # browser's own PDF viewer, not trigger a download prompt.
+    disposition = res.headers.get("Content-Disposition", "")
+    assert "inline" in disposition
+    assert "my_report.pdf" in disposition
+    # The exact bytes that were uploaded, byte for byte -- not just "a
+    # 200 with the right headers."
+    assert res.data == small_real_pdf_bytes
+
+
+def test_view_file_unknown_id_returns_404(tmp_path, monkeypatch):
+    client, _, _ = make_client(upload_dir=tmp_path, monkeypatch=monkeypatch)
+
+    res = client.get("/documents/no-such-id/file")
+
+    assert res.status_code == 404
+    assert res.get_json()["error"] == "not_found"
+
+
+def test_view_file_returns_404_when_manifest_entry_has_no_backing_file(tmp_path, monkeypatch):
+    """A manifest row with nothing behind it on disk (e.g. an ephemeral
+    filesystem lost the file across a redeploy -- see DEPLOYMENT.md) must
+    be a clean 404, not a 500 -- chat/citations for this document keep
+    working regardless (its vectors are in Pinecone independently of the
+    original file), only clicking to view it is affected."""
+    document_store = InMemoryDocumentStore()
+    document_store.add_document("ghost-id", "never-actually-saved.pdf", 3, 1, ["ghost-id::0"])
+    client, _, _ = make_client(document_store=document_store, upload_dir=tmp_path, monkeypatch=monkeypatch)
+
+    res = client.get("/documents/ghost-id/file")
+
+    assert res.status_code == 404
+    assert res.get_json()["error"] == "file_missing"
+
+
+# ---------------------------------------------------------------------------
 # DELETE /documents/<id>
 # ---------------------------------------------------------------------------
 
@@ -405,13 +458,27 @@ def test_get_omitting_document_ids_passes_none_through(tmp_path, monkeypatch):
 def test_get_with_junk_document_ids_falls_back_to_none(tmp_path, monkeypatch):
     """Malformed document_ids (wrong type, empty list, non-string entries)
     degrade to "search everything" rather than a 400 -- see
-    _normalize_document_ids()'s docstring in app.py."""
-    chain = RecordingChain()
-    client, _, _ = make_client(pipeline=FakePipeline(chain=chain), upload_dir=tmp_path, monkeypatch=monkeypatch)
+    _normalize_document_ids()'s docstring in app.py.
 
-    client.post("/get", json={"message": "q1", "history": [], "document_ids": "not-a-list"})
-    client.post("/get", json={"message": "q2", "history": [], "document_ids": []})
-    client.post("/get", json={"message": "q3", "history": [], "document_ids": [123, None, "  "]})
+    A fresh make_client() (and so a fresh, empty SemanticCache) per
+    scenario, sharing only the chain/its recorded payloads across all
+    three -- rather than three requests against one shared client/cache.
+    FakeEmbeddings below keys purely off len(text) % 7, and reusing one
+    cache across similar-enough fake vectors risks the second or third
+    request landing as a cache hit on an earlier one instead of a
+    genuinely separate chain invocation, which is what this test actually
+    needs to observe; a fresh cache per request removes that risk
+    entirely rather than relying on hand-picked text lengths to dodge it.
+    """
+    chain = RecordingChain()
+
+    for message, document_ids in [
+        ("first question", "not-a-list"),
+        ("second question", []),
+        ("third question", [123, None, "  "]),
+    ]:
+        client, _, _ = make_client(pipeline=FakePipeline(chain=chain), upload_dir=tmp_path, monkeypatch=monkeypatch)
+        client.post("/get", json={"message": message, "history": [], "document_ids": document_ids})
 
     assert [p["document_ids"] for p in chain.invoke_payloads] == [None, None, None]
 

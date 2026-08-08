@@ -69,7 +69,7 @@ import re
 import time
 
 from dotenv import load_dotenv
-from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+from flask import Flask, Response, jsonify, render_template, request, send_file, stream_with_context
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -83,6 +83,7 @@ from src.documents import (
     DOCUMENTS_NAMESPACE,
     InvalidUpload,
     MAX_UPLOAD_BYTES,
+    find_document_file_path,
     ingest_pdf,
     remove_uploaded_file,
     save_and_validate,
@@ -799,6 +800,55 @@ def create_app(pipeline=None, cache=None, telemetry=None, document_store=None):
     @app.route("/documents", methods=["GET"])
     def list_documents():
         return jsonify({"documents": document_store.list_documents()})
+
+    @app.route("/documents/<doc_id>/file", methods=["GET"])
+    def view_document_file(doc_id):
+        """Serves a document's actual PDF bytes -- what static/app.jsx's
+        DocumentItem links to so clicking a document's name opens it
+        (most browsers render a PDF directly rather than downloading it,
+        since this is sent inline -- see send_file() below), for either
+        a seeded or an uploaded document identically, the same
+        no-distinction principle as everywhere else document-related
+        (see src/documents.py's module docstring).
+
+        Unauthenticated, same as every other route here -- consistent
+        with there being no login system anywhere in this app yet (see
+        README's Future scope) and with the knowledge base already being
+        fully shared, not private per-visitor.
+        """
+        doc = document_store.get_document(doc_id)
+        if not doc:
+            return jsonify({"ok": False, "error": "not_found", "message": "No document with that id."}), 404
+
+        path = find_document_file_path(doc_id, doc["filename"])
+        if not path:
+            # The manifest says this document exists but its file
+            # doesn't -- e.g. someone deleted a file out from under
+            # data/seed/ by hand, or an uploaded file's disk copy was
+            # lost some other way disk-related (a redeploy on a host
+            # with an ephemeral filesystem, most likely -- see
+            # DEPLOYMENT.md). The document is still fully usable for
+            # chat regardless (its vectors are in Pinecone independently
+            # of whether the original file still exists on disk) -- only
+            # clicking to view the original PDF is affected.
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": "file_missing",
+                        "message": "The original file for this document could not be found.",
+                    }
+                ),
+                404,
+            )
+
+        # as_attachment=False (the default) sends it inline rather than
+        # forcing a download -- most browsers render a PDF directly when
+        # it arrives this way, which is what "view" should mean here.
+        # download_name only affects the *suggested* filename (e.g. if
+        # the person saves it from their PDF viewer) -- independent of
+        # inline-vs-attachment, so it's worth setting either way.
+        return send_file(path, mimetype="application/pdf", download_name=doc["filename"])
 
     @app.route("/documents/<doc_id>", methods=["DELETE"])
     def delete_document(doc_id):

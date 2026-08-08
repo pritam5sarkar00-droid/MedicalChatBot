@@ -42,7 +42,10 @@ demo from a system someone actually thought about running in production.
   more (the paperclip icon in the composer, or the "+" in the sidebar)
   adds to the exact same knowledge base, indexed and cited identically —
   there's no special-cased "reference" document behind the scenes. Every
-  document can be viewed and removed from the sidebar. If nothing in the
+  document in the sidebar can be clicked to open the actual PDF in a new
+  tab (`GET /documents/<id>/file`, served inline so the browser renders
+  it directly rather than downloading it) or removed entirely — seeded
+  and uploaded documents behave identically for both. If nothing in the
   knowledge base has anything relevant to a question, you get a plain "I
   don't have information about that" instead of a guess — see "How
   retrieval works" below for how that's enforced.
@@ -325,6 +328,8 @@ MediCare-AI-Pritam/
 │                              #   from CDN, mounts <div id="root">) — served at "/" by app.py
 ├── index.html                 # Same shell, Jinja-free — for deploying the frontend as its own static
 │                              #   site (Netlify/Vercel/...) instead of Flask serving it; see DEPLOYMENT.md
+├── netlify.toml               # Tells Netlify how to package index.html + static/ in isolation from the
+│                              #   backend files sitting right next to them; see DEPLOYMENT.md
 ├── static/
 │   ├── theme.css               # CSS custom properties for light/dark theme
 │   └── app.jsx                  # The whole React app: chat, document selection, Analytics dashboard, SSE

@@ -16,7 +16,13 @@ from pypdf import PdfReader, PdfWriter
 from werkzeug.datastructures import FileStorage
 
 import src.documents as documents
-from src.documents import InvalidUpload, ingest_pdf, remove_uploaded_file, save_and_validate
+from src.documents import (
+    InvalidUpload,
+    find_document_file_path,
+    ingest_pdf,
+    remove_uploaded_file,
+    save_and_validate,
+)
 from src.helper import CHUNK_SIZE
 
 
@@ -172,3 +178,70 @@ def test_remove_uploaded_file_is_safe_when_nothing_matches(isolated_upload_dir):
 def test_remove_uploaded_file_is_safe_when_directory_does_not_exist(monkeypatch, tmp_path):
     monkeypatch.setattr(documents, "UPLOAD_DIR", str(tmp_path / "does-not-exist"))
     remove_uploaded_file("anything")  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# find_document_file_path -- what app.py's GET /documents/<id>/file route
+# (click a document in the sidebar to view the actual PDF) resolves a
+# document's id to an actual file with. See its docstring for why an
+# uploaded and a seeded document need genuinely different lookup logic
+# despite behaving identically everywhere else document-related.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def isolated_seed_dir(tmp_path, monkeypatch):
+    """Redirects SEED_DIR to a pytest tmp_path for tests exercising the
+    seed-file half of find_document_file_path(), so nothing ever reads
+    the real project's data/seed/*.pdf during a test run -- the same
+    isolation isolated_upload_dir (above) gives the upload half."""
+    seed_dir = tmp_path / "seed"
+    seed_dir.mkdir()
+    monkeypatch.setattr(documents, "SEED_DIR", str(seed_dir))
+    return seed_dir
+
+
+def test_finds_an_uploaded_document_by_its_doc_id_prefix(small_real_pdf_bytes, isolated_upload_dir):
+    doc_id, saved_path, display_name = save_and_validate(make_file_storage(small_real_pdf_bytes, "report.pdf"))
+
+    found = find_document_file_path(doc_id, display_name)
+
+    assert found == saved_path
+
+
+def test_finds_a_seed_document_by_its_plain_filename(isolated_seed_dir):
+    seed_file = isolated_seed_dir / "diabetes.pdf"
+    seed_file.write_bytes(b"%PDF-1.4 fake seed content")
+
+    found = find_document_file_path("seed-diabetes", "diabetes.pdf")
+
+    assert found == str(seed_file)
+
+
+def test_upload_dir_is_checked_before_seed_dir(small_real_pdf_bytes, isolated_upload_dir, isolated_seed_dir):
+    """Not a realistic collision in practice (uploads use random uuid4
+    ids, seed documents use deterministic seed-<slug> ids -- see
+    seed_data.py's _seed_doc_id() -- so the two id spaces don't actually
+    overlap), but the lookup order should still be well-defined rather
+    than accidental."""
+    doc_id, saved_path, display_name = save_and_validate(make_file_storage(small_real_pdf_bytes, "same-name.pdf"))
+    decoy_seed_file = isolated_seed_dir / display_name
+    decoy_seed_file.write_bytes(b"%PDF-1.4 this one should NOT be returned")
+
+    found = find_document_file_path(doc_id, display_name)
+
+    assert found == saved_path
+
+
+def test_returns_none_for_an_id_with_no_matching_file_anywhere(isolated_upload_dir, isolated_seed_dir):
+    found = find_document_file_path("no-such-doc-id", "ghost.pdf")
+
+    assert found is None
+
+
+def test_returns_none_when_seed_dir_itself_does_not_exist(isolated_upload_dir, monkeypatch, tmp_path):
+    monkeypatch.setattr(documents, "SEED_DIR", str(tmp_path / "does-not-exist-at-all"))
+
+    found = find_document_file_path("seed-whatever", "whatever.pdf")
+
+    assert found is None

@@ -552,7 +552,7 @@ function HistoryItem({ convo, active, onSelect, onDelete }) {
 function DocumentItem({ doc, selected, onToggleSelect, onDelete }) {
   return (
     <div className="group flex items-center justify-between gap-2 rounded-lg pl-2 pr-2 py-2 mb-0.5 text-[13px] text-[var(--sidebar-text)]">
-      <label className="flex items-center gap-2 min-w-0 cursor-pointer">
+      <div className="flex items-center gap-2 min-w-0 flex-1">
         <input
           type="checkbox"
           checked={selected}
@@ -560,17 +560,35 @@ function DocumentItem({ doc, selected, onToggleSelect, onDelete }) {
           aria-label={`${selected ? "Exclude" : "Include"} ${doc.filename} when answering`}
           className="flex-shrink-0 w-3.5 h-3.5 rounded accent-[var(--accent)] cursor-pointer"
         />
-        <span className="text-[var(--sidebar-muted)] flex-shrink-0">
-          <Icon.FileText />
-        </span>
-        <div className="min-w-0">
-          <p className="truncate leading-snug">{doc.filename}</p>
-          <p className="text-[10.5px] text-[var(--sidebar-muted)] leading-snug">
-            {doc.chunk_count} chunk{doc.chunk_count === 1 ? "" : "s"}
-            {doc.page_count != null ? ` · ${doc.page_count} pg` : ""}
-          </p>
-        </div>
-      </label>
+        {/* A real link (not a button+onClick) so standard browser link
+            behavior comes for free -- middle-click / ctrl-click to open
+            in a background tab, right-click "Open in new tab", etc. --
+            target=_blank means this is a plain navigation, not a
+            fetch()/XHR, so it isn't subject to CORS at all even when the
+            frontend is deployed separately from the API (see
+            DEPLOYMENT.md) -- only the apiUrl() fetch calls elsewhere in
+            this file need ALLOWED_ORIGINS configured on the backend. */}
+        <a
+          href={apiUrl(`/documents/${doc.id}/file`)}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={`View ${doc.filename}`}
+          className="flex items-center gap-2 min-w-0 flex-1 group/link"
+        >
+          <span className="text-[var(--sidebar-muted)] flex-shrink-0">
+            <Icon.FileText />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate leading-snug group-hover/link:text-[var(--accent-strong)] group-hover/link:underline underline-offset-2 transition-colors">
+              {doc.filename}
+            </p>
+            <p className="text-[10.5px] text-[var(--sidebar-muted)] leading-snug">
+              {doc.chunk_count} chunk{doc.chunk_count === 1 ? "" : "s"}
+              {doc.page_count != null ? ` · ${doc.page_count} pg` : ""}
+            </p>
+          </div>
+        </a>
+      </div>
       <button
         title="Remove document"
         aria-label={`Remove ${doc.filename}`}

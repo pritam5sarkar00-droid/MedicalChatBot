@@ -24,7 +24,7 @@ at all — see tests/test_documents.py.
 
 import os
 import uuid
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from werkzeug.utils import secure_filename
 from langchain_core.documents import Document
@@ -57,6 +57,16 @@ MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15MB -- generous for a fact-sheet-sized P
 
 UPLOAD_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "uploads"
+)
+
+# Defined here (not in seed_data.py, which is where it's more obviously
+# "about") specifically so find_document_file_path() below -- which needs
+# to know about both directories to serve a click-to-view request for
+# either kind of document -- doesn't have to import seed_data.py to get
+# it, which would be a circular import (seed_data.py already imports
+# from this module). seed_data.py imports SEED_DIR from here instead.
+SEED_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "seed"
 )
 
 
@@ -164,3 +174,36 @@ def remove_uploaded_file(doc_id: str) -> None:
                 os.remove(os.path.join(UPLOAD_DIR, name))
             except OSError:
                 pass
+
+
+def find_document_file_path(doc_id: str, filename: str) -> Optional[str]:
+    """Resolves a document's id (+ the filename document_store has on
+    record for it) to wherever its actual PDF bytes live on disk --
+    UPLOAD_DIR for something uploaded through the UI, SEED_DIR for one of
+    the bundled data/seed/*.pdf files -- so app.py's GET
+    /documents/<id>/file route can serve either kind identically, the
+    same "no distinction once it's in the knowledge base" principle as
+    everywhere else (see this module's docstring).
+
+    The two live in different places with different naming schemes for
+    an unrelated reason (upload filenames are prefixed with their doc_id
+    to keep two people's same-named upload from colliding on disk -- see
+    save_and_validate(); seed files don't need that, since there's only
+    ever one of each committed to the repo) -- this function is what
+    hides that difference from every caller.
+
+    Returns None (not an exception) if the manifest says a document
+    exists but its file doesn't -- e.g. someone deleted a file out from
+    under data/seed/ by hand -- so the route can turn that into a clean
+    404 rather than a 500.
+    """
+    if os.path.isdir(UPLOAD_DIR):
+        for name in os.listdir(UPLOAD_DIR):
+            if name.startswith(f"{doc_id}__"):
+                return os.path.join(UPLOAD_DIR, name)
+
+    seed_path = os.path.join(SEED_DIR, filename)
+    if os.path.isfile(seed_path):
+        return seed_path
+
+    return None
