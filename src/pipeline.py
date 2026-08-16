@@ -540,7 +540,7 @@ def build_pipeline(index_name: str = INDEX_NAME, k: int = 3, use_reranker: bool 
         reranker=reranker,
     )
 
-    chat_model = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.3)
+    chat_model = ChatGroq(model="openai/gpt-oss-120b", temperature=0.3)
     chain = build_conversational_chain(chat_model, retriever)
 
     return RAGPipeline(embeddings=embeddings, retriever=retriever, chain=chain, vectorstore=docsearch, reranker=reranker)

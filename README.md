@@ -131,7 +131,7 @@ data/seed/*.pdf (bundled)                  a PDF you upload in the app
         │  │                     DELETE /documents/<id>)
         │  └─ src/telemetry.py  (logs latency/cache/emergency for every turn)
         ▼
-  templates/chat.html + static/app.jsx    ◄── SSE stream ──  Llama 3.3 70B
+  templates/chat.html + static/app.jsx    ◄── SSE stream ──  openai/gpt-oss-120b
   (chat UI, browser)                                          via Groq
 ```
 
@@ -165,7 +165,7 @@ it's purely a deployment-time choice.
    follow-up) is what the final answering call sees too. If nothing
    clears the similarity floor, the answer becomes a fixed "I don't have
    information about that" — no LLM call needed. Otherwise
-   `create_stuff_documents_chain` asks Llama 3.3 70B (via Groq) to answer
+   `create_stuff_documents_chain` asks openai/gpt-oss-120b (via Groq) to answer
    using only that context (each chunk labeled with its source and page,
    so the model can name one back if asked) — streamed back
    chunk-by-chunk.
@@ -258,7 +258,7 @@ instead of hardcoding a second palette. With zero queries logged yet
 
 | Layer               | Technology                                                        |
 |----------------------|--------------------------------------------------------------------|
-| LLM                  | Llama 3.3 70B via **Groq** (`langchain-groq`) — free, no card      |
+| LLM                  | openai/gpt-oss-120b via **Groq** (`langchain-groq`) — free, no card      |
 | Orchestration        | LangChain (RAG chains, history-aware retriever, streaming)        |
 | Embeddings           | HuggingFace `sentence-transformers/all-MiniLM-L6-v2` (384-dim) — in-process or via `inference_service/` |
 | Vector database       | Pinecone (serverless, free Starter plan) — one index, one shared namespace for every document |

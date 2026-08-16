@@ -51,7 +51,7 @@ Request flow for a chat turn:
      retrieval and generation.
   4. On a cache miss: a history-aware retriever rewrites follow-ups into
      standalone questions, searches Pinecone for the top-k chunks (filtered
-     to document_ids when given), and Llama 3.3 70B (via Groq) answers
+     to document_ids when given), and  openai/gpt-oss-120b (via Groq) answers
      using only that context.
   5. The turn (latency breakdown, cache hit, source count) is logged via
      src/telemetry.py, which is what powers /stats.
