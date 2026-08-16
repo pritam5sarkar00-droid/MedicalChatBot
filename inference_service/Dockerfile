@@ -7,7 +7,8 @@ COPY inference_service/requirements.txt /app/requirements.txt
 # CPU-only torch first -- see the root Dockerfile's comment for why this
 # matters (skips ~1-2GB of unused CUDA/NVIDIA packages that a plain
 # `pip install sentence-transformers` would otherwise pull in on Linux).
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir "typing-extensions>=4.10.0"
+RUN pip install --no-cache-dir --timeout 100 --retries 10 torch --index-url  https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY inference_service/app.py /app/app.py
