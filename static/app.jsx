@@ -719,7 +719,7 @@ function Sidebar({ theme, onToggleTheme, conversations, activeId, onSelect, onDe
                 <span className="font-normal italic text-[#4FA890]">AI</span>
                 <span className="w-1.5 h-1.5 rounded-full bg-[#4FA890] animate-pulse ml-0.5" title="Ready" />
               </h1>
-              <p className="font-mono text-[11px] text-[var(--sidebar-muted)] tracking-wide mt-0.5">by Pritam</p>
+              <p className="font-mono text-[11px] text-[var(--sidebar-muted)] tracking-wide mt-0.5"></p>
             </div>
             <button
               onClick={onClose}
