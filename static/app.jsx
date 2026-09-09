@@ -1622,8 +1622,14 @@ function App() {
 
       // A stalled connection (server hung, network died silently) would
       // otherwise leave the user staring at a typing indicator forever.
+      // 150s, not something shorter: on a cold Render free instance the
+      // backend itself can spend up to ~100s retrying a sleeping
+      // inference_service/ before it gives up (see src/helper.py's
+      // _REMOTE_MAX_WAIT_S) -- this needs to stay comfortably above that
+      // budget or the browser aborts before the backend could ever
+      // succeed, which is indistinguishable from "it never wakes up."
       const controller = new AbortController();
-      const stallTimer = setTimeout(() => controller.abort(), 60000);
+      const stallTimer = setTimeout(() => controller.abort(), 150000);
 
       try {
         const res = await fetch(apiUrl("/get/stream"), {
@@ -1744,9 +1750,12 @@ function App() {
 
     // Embedding a PDF locally can genuinely take a while on a slow
     // free-tier CPU (see README) — a longer timeout than a normal chat
-    // turn, so a big-but-valid file isn't cut off mid-index.
+    // turn, so a big-but-valid file isn't cut off mid-index. Kept in step
+    // with the /get/stream timer below: both need to clear the backend's
+    // own ~100s cold-start retry budget (src/helper.py's _REMOTE_MAX_WAIT_S)
+    // with room to spare.
     const controller = new AbortController();
-    const stallTimer = setTimeout(() => controller.abort(), 120000);
+    const stallTimer = setTimeout(() => controller.abort(), 150000);
 
     fetch(apiUrl("/documents/upload"), { method: "POST", body: formData, signal: controller.signal })
       .then(async (res) => {
