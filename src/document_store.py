@@ -66,6 +66,7 @@ class PostgresDocumentStore:
         from psycopg2 import pool as pg_pool
 
         self._dict_cursor = psycopg2.extras.RealDictCursor
+        self._OperationalError = psycopg2.OperationalError  # <-- stored for retry logic
 
         database_url = os.environ.get("DATABASE_URL", "")
         self._pool = pg_pool.ThreadedConnectionPool(min_conn, max_conn, dsn=database_url)
@@ -115,17 +116,16 @@ class PostgresDocumentStore:
 
             except Exception as e:
                 if conn:
-                    # If the connection is broken, close it permanently
-                    # (putconn with close=True discards it from the pool)
+                    # If OperationalError (connection broken), close permanently.
+                    # Otherwise release back to pool.
                     try:
-                        self._pool.putconn(conn, close=isinstance(e, __import__('psycopg2').OperationalError))
+                        close_conn = isinstance(e, self._OperationalError)
+                        self._pool.putconn(conn, close=close_conn)
                     except Exception:
                         pass
-                if attempt < max_retries and isinstance(e, __import__('psycopg2').OperationalError):
-                    # Retry only for OperationalError (connection issues)
+                if attempt < max_retries and isinstance(e, self._OperationalError):
                     time.sleep(0.5 * (attempt + 1))
                     continue
-                # For other exceptions, re-raise immediately
                 raise
 
     def init_db(self):
