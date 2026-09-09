@@ -32,62 +32,32 @@ Run directly for local dev / in a container:
     python3 inference_service/app.py
 (reads PORT from the environment, defaulting to 8081 -- see
 inference_service/Dockerfile)
+
+IMPORTANT: Models are now loaded EAGERLY at startup, not lazily.
+This means the container will take longer to become "ready" (usually
+10-40s depending on cold cache), but it will never accept a request
+before the embedding model is fully resident in memory. The /health
+endpoint will return 503 until loading is complete, so Render/Koyeb
+keep retrying and don't mark the service live prematurely.
 """
 
 import os
 import time
-import threading
-
 from flask import Flask, jsonify, request
 from werkzeug.exceptions import HTTPException
 
-# ------------- GLOBALS (lazy-loaded) -------------
+# ------------- GLOBALS -------------
 _embedder = None
 _reranker = None
-_embed_lock = threading.Lock()
-_rerank_lock = threading.Lock()
 
 # Set LOAD_RERANKER=true in your environment ONLY if you have >1GB RAM.
 # On 512MB Render instances, leave it false (default) to avoid OOM.
 _LOAD_RERANKER = os.getenv("LOAD_RERANKER", "false").lower() == "true"
 
 
-# ------------- LAZY LOADERS (called on first request) -------------
-def _load_embedder():
-    """Loads only the embedding model on first /embed request."""
-    global _embedder
-    if _embedder is not None:
-        return
-    with _embed_lock:
-        if _embedder is not None:
-            return
-        from sentence_transformers import SentenceTransformer
-        print("[inference_service] loading sentence-transformers/all-MiniLM-L6-v2 ...", flush=True)
-        t0 = time.time()
-        _embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-        print(f"[inference_service] embedding model ready in {time.time() - t0:.1f}s", flush=True)
-
-
-def _load_reranker():
-    """Loads the reranker on first /rerank request (only if enabled)."""
-    global _reranker
-    if not _LOAD_RERANKER:
-        return
-    if _reranker is not None:
-        return
-    with _rerank_lock:
-        if _reranker is not None:
-            return
-        from sentence_transformers import CrossEncoder
-        from torch.nn import Sigmoid
-        print("[inference_service] loading cross-encoder/ms-marco-MiniLM-L-6-v2 ...", flush=True)
-        t0 = time.time()
-        _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", activation_fn=Sigmoid())
-        print(f"[inference_service] reranker ready in {time.time() - t0:.1f}s", flush=True)
-
-
 # ------------- AUTH (mirrors src/helper.py) -------------
 def _check_auth():
+    """Return True if no token is set, or if the Authorization header matches."""
     expected = os.environ.get("INFERENCE_SERVICE_TOKEN", "")
     if not expected:
         return True
@@ -105,20 +75,22 @@ def create_app():
 
     @app.route("/health")
     def health():
-        # Ready once the embedder is loaded (reranker is optional)
+        """
+        Ready only when embedder is loaded AND (if reranker enabled) reranker loaded.
+        Returns 503 while loading so the platform keeps polling until ready.
+        """
+        ready = _embedder is not None and (not _LOAD_RERANKER or _reranker is not None)
+        status_code = 200 if ready else 503
         return jsonify({
-            "status": "ok" if _embedder is not None else "loading",
-            "models_loaded": _embedder is not None,
+            "status": "ok" if ready else "loading",
+            "models_loaded": ready,
             "reranker_enabled": _LOAD_RERANKER
-        })
+        }), status_code
 
     @app.route("/embed", methods=["POST"])
     def embed():
         if not _check_auth():
             return jsonify({"error": "unauthorized"}), 401
-
-        # Lazy-load embedder on first request
-        _load_embedder()
         if _embedder is None:
             return jsonify({"error": "models still loading, try again shortly"}), 503
 
@@ -143,8 +115,6 @@ def create_app():
         if not _check_auth():
             return jsonify({"error": "unauthorized"}), 401
 
-        # Lazy-load reranker on first request
-        _load_reranker()
         if _reranker is None:
             return jsonify({"error": "reranker still loading, try again shortly"}), 503
 
@@ -170,13 +140,30 @@ def create_app():
     return app
 
 
-# ------------- BOOT -------------
-# IMPORTANT: Models are NOT loaded at import time anymore!
-# They load lazily on the first request to /embed or /rerank.
+# ------------- BOOT: LOAD MODELS EAGERLY -------------
+print("[inference_service] Loading models at startup...", flush=True)
+t0 = time.time()
+
+# Load embedding model
+from sentence_transformers import SentenceTransformer
+_embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+print(f"[inference_service] Embedding model ready in {time.time() - t0:.1f}s", flush=True)
+
+# Optionally load reranker
+if _LOAD_RERANKER:
+    from sentence_transformers import CrossEncoder
+    from torch.nn import Sigmoid
+    print("[inference_service] Loading cross-encoder/ms-marco-MiniLM-L-6-v2 ...", flush=True)
+    _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", activation_fn=Sigmoid())
+    print(f"[inference_service] Reranker ready in {time.time() - t0:.1f}s", flush=True)
+else:
+    print("[inference_service] Reranker disabled (LOAD_RERANKER not set to 'true')", flush=True)
+
+# Create the Flask app only after models are loaded
 app = create_app()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8081))
-    # For local dev only. In production, Render uses Gunicorn.
-    # Make sure to set WEB_CONCURRENCY=1 in Render env to keep memory low!
+    # For local dev only. In production, use Gunicorn (see Dockerfile).
+    # Render sets WEB_CONCURRENCY=1 by default, which is fine.
     app.run(host="0.0.0.0", port=port)
