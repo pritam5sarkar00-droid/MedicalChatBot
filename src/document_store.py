@@ -47,6 +47,7 @@ InMemoryDocumentStore` doesn't require that package to even be installed.
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -69,108 +70,137 @@ class PostgresDocumentStore:
         database_url = os.environ.get("DATABASE_URL", "")
         self._pool = pg_pool.ThreadedConnectionPool(min_conn, max_conn, dsn=database_url)
 
-    def _connect(self):
-        return self._pool.getconn()
+    def _get_conn(self):
+        """Get a connection from the pool, retrying if pool is temporarily exhausted."""
+        for attempt in range(3):
+            try:
+                return self._pool.getconn()
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                time.sleep(0.5 * (attempt + 1))
+        # Should never reach here, but just in case
+        raise RuntimeError("Could not obtain DB connection")
 
-    def _release(self, conn):
-        self._pool.putconn(conn)
+    def _execute(self, query, params=None, fetchall=False, fetchone=False, commit=False):
+        """
+        Execute a SQL query with automatic retry on connection errors.
+
+        If psycopg2.OperationalError is raised (e.g., SSL connection closed
+        unexpectedly), the broken connection is discarded and the operation
+        is retried with a fresh one from the pool.
+        """
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            conn = None
+            try:
+                conn = self._get_conn()
+                cur = conn.cursor(cursor_factory=self._dict_cursor if (fetchall or fetchone) else None)
+                if params is not None:
+                    cur.execute(query, params)
+                else:
+                    cur.execute(query)
+
+                if fetchall:
+                    result = cur.fetchall()
+                elif fetchone:
+                    result = cur.fetchone()
+                else:
+                    result = None
+
+                if commit:
+                    conn.commit()
+                cur.close()
+                return result
+
+            except Exception as e:
+                if conn:
+                    # If the connection is broken, close it permanently
+                    # (putconn with close=True discards it from the pool)
+                    try:
+                        self._pool.putconn(conn, close=isinstance(e, __import__('psycopg2').OperationalError))
+                    except Exception:
+                        pass
+                if attempt < max_retries and isinstance(e, __import__('psycopg2').OperationalError):
+                    # Retry only for OperationalError (connection issues)
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                # For other exceptions, re-raise immediately
+                raise
 
     def init_db(self):
-        conn = self._connect()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS uploaded_documents (
-                    id VARCHAR(32) PRIMARY KEY,
-                    filename TEXT NOT NULL,
-                    chunk_count INTEGER NOT NULL,
-                    page_count INTEGER,
-                    vector_ids TEXT NOT NULL,
-                    uploaded_at VARCHAR(64) NOT NULL
-                )
-                """
+        self._execute(
+            """
+            CREATE TABLE IF NOT EXISTS uploaded_documents (
+                id VARCHAR(32) PRIMARY KEY,
+                filename TEXT NOT NULL,
+                chunk_count INTEGER NOT NULL,
+                page_count INTEGER,
+                vector_ids TEXT NOT NULL,
+                uploaded_at VARCHAR(64) NOT NULL
             )
-            # See this module's docstring: tracks every id that has ever
-            # been deleted (not just what's currently absent), so
-            # seed_data.py can tell "never seeded yet" apart from
-            # "deliberately removed" on a later restart.
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS deleted_document_ids (
-                    id VARCHAR(64) PRIMARY KEY,
-                    deleted_at VARCHAR(64) NOT NULL
-                )
-                """
+            """,
+            commit=True
+        )
+        # See this module's docstring: tracks every id that has ever
+        # been deleted (not just what's currently absent), so
+        # seed_data.py can tell "never seeded yet" apart from
+        # "deliberately removed" on a later restart.
+        self._execute(
+            """
+            CREATE TABLE IF NOT EXISTS deleted_document_ids (
+                id VARCHAR(64) PRIMARY KEY,
+                deleted_at VARCHAR(64) NOT NULL
             )
-            conn.commit()
-            cur.close()
-        finally:
-            self._release(conn)
+            """,
+            commit=True
+        )
 
     def add_document(self, doc_id: str, filename: str, chunk_count: int, page_count: int, vector_ids: List[str]):
-        conn = self._connect()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """INSERT INTO uploaded_documents (id, filename, chunk_count, page_count, vector_ids, uploaded_at)
-                   VALUES (%s, %s, %s, %s, %s, %s)""",
-                (
-                    doc_id,
-                    filename,
-                    chunk_count,
-                    page_count,
-                    # Stored as a JSON string in a TEXT column rather than
-                    # a native Postgres array -- one fewer type mapping to
-                    # get right, and this table is never queried *by*
-                    # vector_ids, only ever read back whole for a known id.
-                    json.dumps(vector_ids),
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
-            conn.commit()
-            cur.close()
-        finally:
-            self._release(conn)
+        self._execute(
+            """INSERT INTO uploaded_documents (id, filename, chunk_count, page_count, vector_ids, uploaded_at)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            params=(
+                doc_id,
+                filename,
+                chunk_count,
+                page_count,
+                # Stored as a JSON string in a TEXT column rather than
+                # a native Postgres array -- one fewer type mapping to
+                # get right, and this table is never queried *by*
+                # vector_ids, only ever read back whole for a known id.
+                json.dumps(vector_ids),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+            commit=True
+        )
 
     def list_documents(self) -> List[dict]:
-        conn = self._connect()
-        try:
-            cur = conn.cursor(cursor_factory=self._dict_cursor)
-            cur.execute(
-                "SELECT id, filename, chunk_count, page_count, uploaded_at "
-                "FROM uploaded_documents ORDER BY uploaded_at DESC"
-            )
-            rows = [dict(r) for r in cur.fetchall()]
-            cur.close()
-            return rows
-        finally:
-            self._release(conn)
+        rows = self._execute(
+            "SELECT id, filename, chunk_count, page_count, uploaded_at "
+            "FROM uploaded_documents ORDER BY uploaded_at DESC",
+            fetchall=True
+        )
+        return [dict(r) for r in rows]
 
     def get_document(self, doc_id: str) -> Optional[dict]:
-        conn = self._connect()
-        try:
-            cur = conn.cursor(cursor_factory=self._dict_cursor)
-            cur.execute("SELECT * FROM uploaded_documents WHERE id = %s", (doc_id,))
-            row = cur.fetchone()
-            cur.close()
-            if not row:
-                return None
-            doc = dict(row)
-            doc["vector_ids"] = json.loads(doc["vector_ids"])
-            return doc
-        finally:
-            self._release(conn)
+        row = self._execute(
+            "SELECT * FROM uploaded_documents WHERE id = %s",
+            params=(doc_id,),
+            fetchone=True
+        )
+        if not row:
+            return None
+        doc = dict(row)
+        doc["vector_ids"] = json.loads(doc["vector_ids"])
+        return doc
 
     def delete_document(self, doc_id: str):
-        conn = self._connect()
-        try:
-            cur = conn.cursor()
-            cur.execute("DELETE FROM uploaded_documents WHERE id = %s", (doc_id,))
-            conn.commit()
-            cur.close()
-        finally:
-            self._release(conn)
+        self._execute(
+            "DELETE FROM uploaded_documents WHERE id = %s",
+            params=(doc_id,),
+            commit=True
+        )
 
     def mark_deleted(self, doc_id: str):
         """Records that doc_id was deliberately removed, so seed_data.py
@@ -181,29 +211,20 @@ class PostgresDocumentStore:
         too, since seed_data.py only ever looks up the deterministic ids
         it itself generates for files under data/seed/, and an upload's
         id (random, from uuid4) will never collide with one of those."""
-        conn = self._connect()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO deleted_document_ids (id, deleted_at) VALUES (%s, %s) "
-                "ON CONFLICT (id) DO NOTHING",
-                (doc_id, datetime.now(timezone.utc).isoformat()),
-            )
-            conn.commit()
-            cur.close()
-        finally:
-            self._release(conn)
+        self._execute(
+            "INSERT INTO deleted_document_ids (id, deleted_at) VALUES (%s, %s) "
+            "ON CONFLICT (id) DO NOTHING",
+            params=(doc_id, datetime.now(timezone.utc).isoformat()),
+            commit=True
+        )
 
     def was_deleted(self, doc_id: str) -> bool:
-        conn = self._connect()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT 1 FROM deleted_document_ids WHERE id = %s", (doc_id,))
-            found = cur.fetchone() is not None
-            cur.close()
-            return found
-        finally:
-            self._release(conn)
+        row = self._execute(
+            "SELECT 1 FROM deleted_document_ids WHERE id = %s",
+            params=(doc_id,),
+            fetchone=True
+        )
+        return row is not None
 
 
 class InMemoryDocumentStore:
