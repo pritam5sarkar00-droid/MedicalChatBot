@@ -1347,7 +1347,7 @@ function Dashboard({ theme, onClose }) {
       <div className="flex items-center gap-2.5 px-3 md:px-4 py-2.5 border-b border-[var(--border)]">
         <button
           onClick={onClose}
-          className="md:hidden p-1.5 rounded-md text-[var(--ink)] hover:bg-[var(--accent-soft)] transition-colors flex-shrink-0"
+          className="p-1.5 rounded-md text-[var(--ink)] hover:bg-[var(--accent-soft)] transition-colors flex-shrink-0"
           aria-label="Back to chat"
           title="Back to chat"
         >

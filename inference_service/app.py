@@ -33,16 +33,31 @@ Run directly for local dev / in a container:
 (reads PORT from the environment, defaulting to 8081 -- see
 inference_service/Dockerfile)
 
-IMPORTANT: Models are now loaded EAGERLY at startup, not lazily.
-This means the container will take longer to become "ready" (usually
-10-40s depending on cold cache), but it will never accept a request
-before the embedding model is fully resident in memory. The /health
-endpoint will return 503 until loading is complete, so Render/Koyeb
-keep retrying and don't mark the service live prematurely.
+Models load in a background thread, started right after the Flask app
+object exists -- the port opens (and /, /health respond) within a
+second or two of the process starting, instead of only after the full
+10-40s model load finishes. /health, /embed, and /rerank all still gate
+on _embedder (and _reranker) being non-None, returning 503 ("loading")
+until that flips to True, so nothing is ever served before it's
+actually ready -- same guarantee as before, just without blocking the
+port on it too.
+
+This matters specifically for waking from Render/Koyeb's free-tier
+inactivity sleep (see DEPLOYMENT.md): the previous eager-at-import
+version meant the platform couldn't even open a TCP connection here
+until loading finished, which *added* to the platform's own cold-start
+time rather than overlapping with it. One trade-off: on a *fresh
+deploy* (not a sleep/wake cycle), Render may consider this service
+live a few seconds before models are actually loaded, since / and
+/health now respond immediately -- harmless, since any request that
+arrives in that window gets a clean 503 and the caller (src/helper.py's
+RemoteEmbeddings/RemoteReranker) already retries through that exactly
+like it retries through a cold start.
 """
 
 import os
 import time
+import threading
 from flask import Flask, jsonify, request
 from werkzeug.exceptions import HTTPException
 
@@ -140,27 +155,33 @@ def create_app():
     return app
 
 
-# ------------- BOOT: LOAD MODELS EAGERLY -------------
-print("[inference_service] Loading models at startup...", flush=True)
-t0 = time.time()
+# ------------- BOOT: CREATE THE APP IMMEDIATELY, LOAD MODELS IN THE BACKGROUND -------------
+def _load_models() -> None:
+    global _embedder, _reranker
+    print("[inference_service] Loading models in the background...", flush=True)
+    t0 = time.time()
 
-# Load embedding model
-from sentence_transformers import SentenceTransformer
-_embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-print(f"[inference_service] Embedding model ready in {time.time() - t0:.1f}s", flush=True)
+    # Load embedding model
+    from sentence_transformers import SentenceTransformer
+    _embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    print(f"[inference_service] Embedding model ready in {time.time() - t0:.1f}s", flush=True)
 
-# Optionally load reranker
-if _LOAD_RERANKER:
-    from sentence_transformers import CrossEncoder
-    from torch.nn import Sigmoid
-    print("[inference_service] Loading cross-encoder/ms-marco-MiniLM-L-6-v2 ...", flush=True)
-    _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", activation_fn=Sigmoid())
-    print(f"[inference_service] Reranker ready in {time.time() - t0:.1f}s", flush=True)
-else:
-    print("[inference_service] Reranker disabled (LOAD_RERANKER not set to 'true')", flush=True)
+    # Optionally load reranker
+    if _LOAD_RERANKER:
+        from sentence_transformers import CrossEncoder
+        from torch.nn import Sigmoid
+        print("[inference_service] Loading cross-encoder/ms-marco-MiniLM-L-6-v2 ...", flush=True)
+        _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", activation_fn=Sigmoid())
+        print(f"[inference_service] Reranker ready in {time.time() - t0:.1f}s", flush=True)
+    else:
+        print("[inference_service] Reranker disabled (LOAD_RERANKER not set to 'true')", flush=True)
 
-# Create the Flask app only after models are loaded
+
+# The app exists -- and the port can open -- before any model has loaded.
 app = create_app()
+
+_loader_thread = threading.Thread(target=_load_models, daemon=True)
+_loader_thread.start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8081))
