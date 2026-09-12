@@ -147,23 +147,30 @@ def text_split(extracted_data):
 # development, tests, and a single-box deploy are completely unaffected.
 # ---------------------------------------------------------------------------
 
-_REMOTE_TIMEOUT_S = 15        # per-attempt timeout -- long enough for a
-                               # normal, already-warm embed/rerank call, short
-                               # enough that one hung attempt doesn't burn the
-                               # whole retry budget below.
+_REMOTE_TIMEOUT_S = 45        # per-attempt timeout. Render's free-tier CPU is
+                               # heavily throttled -- a "warm" embed call can
+                               # legitimately take longer than a few seconds
+                               # under load, not just during a cold start. Too
+                               # short here means a genuinely-in-progress
+                               # response keeps getting cut off before it can
+                               # arrive, which looks identical to "it never
+                               # responds" from the caller's side. Capped to
+                               # the remaining budget below so a slow final
+                               # attempt can't overshoot _REMOTE_MAX_WAIT_S.
 _REMOTE_MAX_WAIT_S = 100      # total time we'll keep retrying ONE embed/
                                # rerank call before giving up. Render's own
                                # figure for a free instance spinning back up
                                # is "about one minute" (render.com/docs/free),
                                # but inference_service/ loads its embedding
-                               # model *before* it starts listening at all
-                               # (see that file's module docstring) -- so the
-                               # real worst case here is that platform figure
-                               # PLUS model load time, not the platform figure
-                               # alone. Kept under static/app.jsx's stream
-                               # abort timer so the backend gives up (with a
-                               # clean error) before the browser does.
-_REMOTE_RETRY_INTERVAL_S = 5  # pause between attempts while retrying
+                               # model in the background after boot (see that
+                               # file's module docstring) -- so the real
+                               # worst case here is that platform figure plus
+                               # whatever's left of model load time, not the
+                               # platform figure alone. Kept under
+                               # static/app.jsx's stream abort timer so the
+                               # backend gives up (with a clean error) before
+                               # the browser does.
+_REMOTE_RETRY_INTERVAL_S = 3  # pause between attempts while retrying
 
 
 def _embedding_service_url() -> str:
@@ -301,12 +308,15 @@ class RemoteEmbeddings(Embeddings):
         deadline = time.monotonic() + _REMOTE_MAX_WAIT_S
         last_error: Optional[Exception] = None
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
                 resp = requests.post(
                     f"{self._base_url}/embed",
                     json={"texts": texts},
                     headers=_remote_auth_headers(),
-                    timeout=_REMOTE_TIMEOUT_S,
+                    timeout=min(_REMOTE_TIMEOUT_S, remaining),
                 )
                 resp.raise_for_status()
                 return resp.json()["embeddings"]
@@ -316,11 +326,14 @@ class RemoteEmbeddings(Embeddings):
                 # is still spinning up). ValueError: resp.json() choking on a
                 # non-JSON body -- same "not actually ready yet" situation
                 # from a different angle. Either way: keep polling, a cold
-                # start is expected here, not a real failure.
+                # start (or just a slow CPU) is expected here, not a real
+                # failure. min(..., remaining) above means the last attempt's
+                # own timeout can't push us past the deadline on its own.
                 last_error = exc
-                if time.monotonic() >= deadline:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     break
-                time.sleep(_REMOTE_RETRY_INTERVAL_S)
+                time.sleep(min(_REMOTE_RETRY_INTERVAL_S, remaining))
         raise RuntimeError(
             f"embedding service at {self._base_url} did not respond within {_REMOTE_MAX_WAIT_S}s: {last_error}"
         )
@@ -359,12 +372,15 @@ class RemoteReranker:
         deadline = time.monotonic() + _REMOTE_MAX_WAIT_S
         last_error: Optional[Exception] = None
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
                 resp = requests.post(
                     f"{self._base_url}/rerank",
                     json={"query": query, "documents": documents},
                     headers=_remote_auth_headers(),
-                    timeout=_REMOTE_TIMEOUT_S,
+                    timeout=min(_REMOTE_TIMEOUT_S, remaining),
                 )
                 resp.raise_for_status()
                 return resp.json()["scores"]
@@ -374,9 +390,10 @@ class RemoteReranker:
                 # same service, so it's usually already warm by now, but
                 # give it the same patience for the rare case it isn't.
                 last_error = exc
-                if time.monotonic() >= deadline:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     break
-                time.sleep(_REMOTE_RETRY_INTERVAL_S)
+                time.sleep(min(_REMOTE_RETRY_INTERVAL_S, remaining))
         raise RuntimeError(
             f"reranker service at {self._base_url} did not respond within {_REMOTE_MAX_WAIT_S}s: {last_error}"
         )
